@@ -1,17 +1,11 @@
 from fastapi import FastAPI
 import os
-import asyncio
-from aiogarmin import Garmin
+from aiogarmin import Client
 
 app = FastAPI()
 
 EMAIL = os.getenv("GARMIN_EMAIL")
 PASSWORD = os.getenv("GARMIN_PASSWORD")
-
-async def get_client():
-    garmin = Garmin()
-    await garmin.login(EMAIL, PASSWORD)
-    return garmin
 
 @app.get("/")
 def root():
@@ -19,18 +13,24 @@ def root():
 
 @app.get("/today")
 async def today():
-    garmin = await get_client()
-    data = await garmin.get_user_summary()
-    return data
+    client = Client()
+    await client.login(EMAIL, PASSWORD)
+
+    summary = await client.get_user_summary()
+    return summary
 
 @app.get("/sleep")
 async def sleep():
-    garmin = await get_client()
-    data = await garmin.get_sleep_data()
+    client = Client()
+    await client.login(EMAIL, PASSWORD)
+
+    data = await client.get_sleep_data()
     return data
 
 @app.get("/activities")
 async def activities():
-    garmin = await get_client()
-    data = await garmin.get_activities(0, 5)
+    client = Client()
+    await client.login(EMAIL, PASSWORD)
+
+    data = await client.get_activities(0, 5)
     return data
