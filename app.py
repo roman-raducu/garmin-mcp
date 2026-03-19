@@ -424,6 +424,14 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
         return response
     except Exception as exc:
         if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarthHTTPError", "GarthException"}:
+            response = getattr(exc, "response", None)
+            if response is not None:
+                response_text = (getattr(response, "text", "") or "").strip()
+                detail = f"Garmin authentication failed: HTTP {response.status_code}"
+                if response_text:
+                    detail = f"{detail} - {response_text[:200]}"
+                raise HTTPException(status_code=401, detail=detail) from exc
+
             raise HTTPException(
                 status_code=401,
                 detail="Garmin authentication failed. Check your email and password.",
