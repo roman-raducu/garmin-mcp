@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Garmin Chat Connector | Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["Space Grotesk", "sans-serif"],
+            },
+            colors: {
+              pitch: "#060805",
+              panel: "#0c100b",
+              line: "#232b1f",
+              ink: "#eff5eb",
+              muted: "#8e9b87",
+              accent: "#b8ff5a",
+              accentSoft: "#141c11",
+              danger: "#ff8b8b",
+            },
+            boxShadow: {
+              glow: "0 0 0 1px rgba(184,255,90,0.12), 0 30px 90px rgba(0,0,0,0.45)",
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="min-h-screen bg-pitch font-sans text-ink">
+    <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(184,255,90,0.10),_transparent_22%),linear-gradient(180deg,_#050704,_#090b08_55%,_#050704)]"></div>
+    <div class="absolute inset-0 -z-10 bg-[linear-gradient(rgba(184,255,90,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(184,255,90,0.05)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:linear-gradient(180deg,white,transparent_85%)]"></div>
+
+    <main class="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-8 md:py-8">
+      <header class="mb-6 flex flex-col gap-4 rounded-[1.75rem] border border-line bg-panel/90 px-5 py-4 shadow-glow backdrop-blur md:flex-row md:items-center md:justify-between">
+        <div class="flex items-center gap-3">
+          <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-accent/25 bg-accent/10 text-sm font-bold text-accent">
+            GC
+          </div>
+          <div>
+            <p class="text-xs uppercase tracking-[0.45em] text-muted">Dashboard</p>
+            <h1 class="mt-1 text-2xl font-bold text-ink">Garmin Data</h1>
+          </div>
+        </div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div class="rounded-full border border-line bg-black/20 px-4 py-2 text-sm text-muted">{{ email }}</div>
+          <button
+            id="logoutButton"
+            type="button"
+            class="rounded-full border border-line bg-black/20 px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent"
+          >
+            Sign out
+          </button>
+        </div>
+      </header>
+
+      <section class="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside class="rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow">
+          <div class="mb-5">
+            <p class="text-xs uppercase tracking-[0.45em] text-muted">Actions</p>
+            <h2 class="mt-3 text-2xl font-bold">Queries</h2>
+          </div>
+          <div class="space-y-3">
+            <button data-endpoint="/today" class="data-button w-full rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-left transition hover:border-accent hover:bg-accentSoft">
+              <div class="text-xs uppercase tracking-[0.35em] text-accent">Today</div>
+              <div class="mt-2 text-lg font-bold text-ink">Daily summary</div>
+            </button>
+            <button data-endpoint="/sleep" class="data-button w-full rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-left transition hover:border-accent hover:bg-accentSoft">
+              <div class="text-xs uppercase tracking-[0.35em] text-accent">Sleep</div>
+              <div class="mt-2 text-lg font-bold text-ink">Sleep payload</div>
+            </button>
+            <button data-endpoint="/activities" class="data-button w-full rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-left transition hover:border-accent hover:bg-accentSoft">
+              <div class="text-xs uppercase tracking-[0.35em] text-accent">Moves</div>
+              <div class="mt-2 text-lg font-bold text-ink">Recent activities</div>
+            </button>
+          </div>
+          <p id="messageBox" class="mt-5 min-h-[3rem] rounded-[1.5rem] border border-line bg-black/20 px-4 py-3 text-sm leading-6 text-muted">
+            Choose an action to load Garmin data.
+          </p>
+        </aside>
+
+        <section class="rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow md:p-6">
+          <div class="mb-5 flex items-center justify-between gap-3">
+            <div>
+              <p class="text-xs uppercase tracking-[0.45em] text-muted">Output</p>
+              <h2 class="mt-2 text-2xl font-bold">Response</h2>
+            </div>
+            <button
+              id="clearOutput"
+              type="button"
+              class="rounded-full border border-line bg-black/20 px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent"
+            >
+              Clear
+            </button>
+          </div>
+          <pre id="output" class="min-h-[36rem] overflow-auto rounded-[1.5rem] border border-line bg-black/30 p-5 text-sm leading-6 text-[#dbe8d3]">No data loaded yet.</pre>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const messageBox = document.getElementById("messageBox");
+      const output = document.getElementById("output");
+      const logoutButton = document.getElementById("logoutButton");
+
+      function setMessage(text, tone = "neutral") {
+        const tones = {
+          neutral: "border border-line bg-black/20 text-muted",
+          success: "border border-accent/20 bg-accent/10 text-accent",
+          error: "border border-red-500/20 bg-red-500/10 text-danger",
+        };
+        messageBox.className = `mt-5 min-h-[3rem] rounded-[1.5rem] px-4 py-3 text-sm leading-6 ${tones[tone] || tones.neutral}`;
+        messageBox.textContent = text;
+      }
+
+      async function safeJson(response) {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.detail || data.message || "Request failed.");
+        }
+        return data;
+      }
+
+      document.querySelectorAll(".data-button").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const endpoint = button.dataset.endpoint;
+          output.textContent = `Loading ${endpoint}...`;
+          setMessage(`Fetching ${endpoint}...`, "neutral");
+
+          try {
+            const response = await fetch(endpoint);
+            const data = await safeJson(response);
+            output.textContent = JSON.stringify(data, null, 2);
+            setMessage(`Loaded ${endpoint}.`, "success");
+          } catch (error) {
+            output.textContent = `Error: ${error.message}`;
+            setMessage(error.message, "error");
+          }
+        });
+      });
+
+      document.getElementById("clearOutput").addEventListener("click", () => {
+        output.textContent = "No data loaded yet.";
+        setMessage("Output cleared.", "neutral");
+      });
+
+      logoutButton.addEventListener("click", async () => {
+        try {
+          const response = await fetch("/api/logout", { method: "POST" });
+          await safeJson(response);
+          window.location.assign("/");
+        } catch (error) {
+          setMessage(error.message, "error");
+        }
+      });
+    </script>
+  </body>
+</html>

@@ -12,7 +12,7 @@ import garth
 from aiogarmin import GarminAuth, GarminClient
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
@@ -286,16 +286,22 @@ def _pending_status_for_browser(browser_session_id: str | None) -> dict[str, Any
     return None
 
 
+def _browser_has_tokens(request: Request) -> bool:
+    browser_session_id = _browser_session_id(request)
+    return bool(browser_session_id and browser_session_id in TOKEN_STORE)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     await _cleanup_pending_auths()
     browser_session_id, needs_cookie = _ensure_browser_session_id(request)
+    if browser_session_id in TOKEN_STORE:
+        return RedirectResponse(url="/dashboard", status_code=303)
+
     response = templates.TemplateResponse(
         request=request,
-        name="index.html",
-        context={
-            "service_origin": str(request.base_url).rstrip("/"),
-        },
+        name="login.html",
+        context={},
     )
     if needs_cookie:
         _set_browser_cookie(response, browser_session_id)
@@ -330,6 +336,23 @@ async def session_status(request: Request):
         "pending_mfa": pending is not None,
         "pending": pending,
     }
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    await _cleanup_pending_auths()
+    if not _browser_has_tokens(request):
+        return RedirectResponse(url="/", status_code=303)
+
+    browser_session_id = _browser_session_id(request)
+    stored_tokens = TOKEN_STORE.get(browser_session_id) if browser_session_id else None
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={
+            "email": stored_tokens.email if stored_tokens else "",
+        },
+    )
 
 
 @app.post("/api/connect")
