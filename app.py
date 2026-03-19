@@ -5,6 +5,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 import aiohttp
@@ -56,6 +57,15 @@ class GarminMfaRequest(BaseModel):
 TOKEN_STORE: dict[str, StoredTokens] = {}
 PENDING_AUTHS: dict[str, PendingAuth] = {}
 GARTH_AUTH_LOCK = asyncio.Lock()
+TREND_WINDOWS: tuple[tuple[str, str, int | None, int | None], ...] = (
+    ("7d", "Last 7 days", 7, None),
+    ("30d", "Last 30 days", 30, None),
+    ("90d", "Last 90 days", 90, None),
+    ("3m", "Last 3 months", None, 3),
+    ("6m", "Last 6 months", None, 6),
+    ("9m", "Last 9 months", None, 9),
+    ("12m", "Last 12 months", None, 12),
+)
 
 
 def _now() -> float:
@@ -303,6 +313,309 @@ def _garmin_retry_after_seconds(response: Any) -> int:
         return max(60, int(retry_after))
     except (TypeError, ValueError):
         return default_retry_after
+
+
+def _shift_months(anchor: date, months: int) -> date:
+    year = anchor.year
+    month = anchor.month - months
+
+    while month <= 0:
+        month += 12
+        year -= 1
+
+    day = min(
+        anchor.day,
+        [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1],
+    )
+    return date(year, month, day)
+
+
+def _window_start(anchor: date, days: int | None = None, months: int | None = None) -> date:
+    if days is not None:
+        return anchor - timedelta(days=days - 1)
+    if months is not None:
+        return _shift_months(anchor, months)
+    return anchor
+
+
+def _coerce_date(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized).date()
+        except ValueError:
+            try:
+                return datetime.strptime(value[:10], "%Y-%m-%d").date()
+            except ValueError:
+                return None
+    return None
+
+
+def _coerce_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _coerce_int(value: Any) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_activity_type(activity: dict[str, Any]) -> str:
+    activity_type = activity.get("activityType")
+    if isinstance(activity_type, dict):
+        for key in ("typeKey", "parentTypeKey", "displayOrder"):
+            value = activity_type.get(key)
+            if value:
+                return str(value)
+
+    for key in ("activityTypeDTO", "activityTypeKey", "typeKey", "activityName"):
+        value = activity.get(key)
+        if value:
+            return str(value)
+
+    return "unknown"
+
+
+def _normalize_activities(raw_activities: Any) -> list[dict[str, Any]]:
+    if isinstance(raw_activities, dict):
+        raw_items = _extract(raw_activities, "activities", "activityData", "activity_data") or []
+    elif isinstance(raw_activities, list):
+        raw_items = raw_activities
+    else:
+        raw_items = []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+
+        activity_date = (
+            _coerce_date(item.get("startTimeLocal"))
+            or _coerce_date(item.get("startTimeGMT"))
+            or _coerce_date(item.get("calendarDate"))
+            or _coerce_date(item.get("date"))
+        )
+        if not activity_date:
+            continue
+
+        normalized.append(
+            {
+                "date": activity_date,
+                "type": _extract_activity_type(item),
+                "distance_km": _coerce_float(item.get("distance")) / 1000,
+                "duration_min": _coerce_float(item.get("duration")) / 60,
+                "moving_duration_min": _coerce_float(item.get("movingDuration")) / 60,
+                "calories": _coerce_float(item.get("calories")),
+                "elevation_gain_m": _coerce_float(item.get("elevationGain")),
+                "average_hr": _coerce_float(item.get("averageHR") or item.get("averageHr")),
+            }
+        )
+    return normalized
+
+
+def _normalize_steps(raw_steps: Any) -> dict[date, int]:
+    if isinstance(raw_steps, dict):
+        raw_items = _extract(raw_steps, "dailySteps", "steps", "stepData") or []
+    elif isinstance(raw_steps, list):
+        raw_items = raw_steps
+    else:
+        raw_items = []
+
+    normalized: dict[date, int] = {}
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        item_date = _coerce_date(item.get("calendarDate") or item.get("date"))
+        if not item_date:
+            continue
+        step_total = _coerce_int(
+            item.get("totalSteps")
+            or item.get("steps")
+            or item.get("value")
+        )
+        normalized[item_date] = step_total
+    return normalized
+
+
+def _top_activity_types(activities: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    counts: dict[str, int] = {}
+    for activity in activities:
+        activity_type = activity["type"]
+        counts[activity_type] = counts.get(activity_type, 0) + 1
+
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [{"type": activity_type, "count": count} for activity_type, count in ranked[:limit]]
+
+
+def _aggregate_window(
+    label: str,
+    title: str,
+    start: date,
+    end: date,
+    activities: list[dict[str, Any]],
+    daily_steps: dict[date, int],
+) -> dict[str, Any]:
+    activity_slice = [activity for activity in activities if start <= activity["date"] <= end]
+    steps_slice = {day: steps for day, steps in daily_steps.items() if start <= day <= end}
+
+    window_days = (end - start).days + 1
+    active_days = len({activity["date"] for activity in activity_slice})
+    total_steps = sum(steps_slice.values())
+    total_distance_km = round(sum(activity["distance_km"] for activity in activity_slice), 2)
+    total_duration_min = round(sum(activity["duration_min"] for activity in activity_slice), 1)
+    total_moving_duration_min = round(sum(activity["moving_duration_min"] for activity in activity_slice), 1)
+    total_calories = round(sum(activity["calories"] for activity in activity_slice), 1)
+    total_elevation_gain_m = round(sum(activity["elevation_gain_m"] for activity in activity_slice), 1)
+    best_step_day = max(steps_slice.values(), default=0)
+    avg_hr_values = [activity["average_hr"] for activity in activity_slice if activity["average_hr"] > 0]
+
+    return {
+        "label": label,
+        "title": title,
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "window_days": window_days,
+        "steps": {
+            "total": total_steps,
+            "daily_average": round(total_steps / window_days, 1) if window_days else 0,
+            "best_day": best_step_day,
+        },
+        "activities": {
+            "count": len(activity_slice),
+            "active_days": active_days,
+            "active_day_ratio": round(active_days / window_days, 3) if window_days else 0,
+            "total_distance_km": total_distance_km,
+            "total_duration_min": total_duration_min,
+            "total_moving_duration_min": total_moving_duration_min,
+            "total_calories": total_calories,
+            "total_elevation_gain_m": total_elevation_gain_m,
+            "average_distance_km": round(total_distance_km / len(activity_slice), 2) if activity_slice else 0,
+            "average_duration_min": round(total_duration_min / len(activity_slice), 1) if activity_slice else 0,
+            "average_heart_rate": round(sum(avg_hr_values) / len(avg_hr_values), 1) if avg_hr_values else 0,
+            "top_activity_types": _top_activity_types(activity_slice),
+        },
+    }
+
+
+def _build_trend_insights(windows: dict[str, dict[str, Any]]) -> list[str]:
+    insights: list[str] = []
+    recent = windows.get("7d")
+    medium = windows.get("30d")
+    long = windows.get("90d")
+    yearly = windows.get("12m")
+
+    if recent and medium:
+        recent_steps = recent["steps"]["daily_average"]
+        medium_steps = medium["steps"]["daily_average"]
+        if medium_steps > 0:
+            change = (recent_steps - medium_steps) / medium_steps
+            if change >= 0.15:
+                insights.append("Your last 7 days are materially above your 30-day step baseline.")
+            elif change <= -0.15:
+                insights.append("Your last 7 days are materially below your 30-day step baseline.")
+
+        recent_activity_density = recent["activities"]["active_day_ratio"]
+        medium_activity_density = medium["activities"]["active_day_ratio"]
+        if recent_activity_density - medium_activity_density >= 0.15:
+            insights.append("Training frequency accelerated over the last 7 days versus the last 30 days.")
+        elif medium_activity_density - recent_activity_density >= 0.15:
+            insights.append("Training frequency slowed over the last 7 days versus the last 30 days.")
+
+    if medium and long:
+        medium_distance_rate = medium["activities"]["total_distance_km"] / max(1, medium["window_days"])
+        long_distance_rate = long["activities"]["total_distance_km"] / max(1, long["window_days"])
+        if long_distance_rate > 0:
+            change = (medium_distance_rate - long_distance_rate) / long_distance_rate
+            if change >= 0.15:
+                insights.append("Your last 30 days show a higher training volume than your 90-day baseline.")
+            elif change <= -0.15:
+                insights.append("Your last 30 days show a lower training volume than your 90-day baseline.")
+
+    if yearly:
+        top_types = yearly["activities"]["top_activity_types"]
+        if top_types:
+            insights.append(f"Your dominant activity over the last 12 months is {top_types[0]['type']}.")
+
+    if not insights:
+        insights.append("No strong directional pattern stands out yet from the current windows.")
+
+    return insights
+
+
+async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
+    oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
+    activities_raw, steps_raw = await asyncio.gather(
+        client.get_activities_by_date(oldest_start, today),
+        client.get_daily_steps(oldest_start, today),
+    )
+    activities_data = _normalize_activities(activities_raw)
+    steps_data = _normalize_steps(steps_raw)
+
+    windows: dict[str, dict[str, Any]] = {}
+    for label, title, days, months in TREND_WINDOWS:
+        start = _window_start(today, days=days, months=months)
+        windows[label] = _aggregate_window(
+            label=label,
+            title=title,
+            start=start,
+            end=today,
+            activities=activities_data,
+            daily_steps=steps_data,
+        )
+
+    return {
+        "as_of": today.isoformat(),
+        "coverage_start": oldest_start.isoformat(),
+        "windows": windows,
+        "insights": _build_trend_insights(windows),
+    }
+
+
+async def _call_optional_client_method(
+    client: GarminClient,
+    method_name: str,
+    *args: Any,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    method = getattr(client, method_name, None)
+    if method is None:
+        return {"available": False, "error": "unsupported_by_library"}
+
+    try:
+        data = await method(*args, **kwargs)
+        return {"available": True, "data": data}
+    except Exception as exc:
+        logger.warning("Failed to fetch %s: %s", method_name, type(exc).__name__)
+        return {"available": False, "error": type(exc).__name__}
+
+
+async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[str, Any]:
+    tasks = {
+        "profile": _call_optional_client_method(client, "get_user_profile"),
+        "core": _call_optional_client_method(client, "fetch_core_data", target_date=today),
+        "body": _call_optional_client_method(client, "fetch_body_data", target_date=today),
+        "activity": _call_optional_client_method(client, "fetch_activity_data"),
+        "training": _call_optional_client_method(client, "fetch_training_data"),
+        "goals": _call_optional_client_method(client, "fetch_goals_data"),
+        "gear": _call_optional_client_method(client, "fetch_gear_data"),
+        "blood_pressure": _call_optional_client_method(client, "fetch_blood_pressure_data"),
+        "menstrual": _call_optional_client_method(client, "fetch_menstrual_data"),
+    }
+
+    names = list(tasks.keys())
+    results = await asyncio.gather(*tasks.values())
+    return {name: result for name, result in zip(names, results)}
 
 
 def _pending_status_for_browser(browser_session_id: str | None) -> dict[str, Any] | None:
@@ -573,3 +886,46 @@ async def activities(request: Request):
         return activity_data
 
     return await _with_client(fetch_activities, request=request)
+
+
+@app.get("/trends")
+async def trends(request: Request):
+    today = date.today()
+
+    async def fetch_trend_data(client: GarminClient) -> Any:
+        return await _fetch_trend_windows(client, today)
+
+    return await _with_client(fetch_trend_data, request=request)
+
+
+@app.get("/context/full")
+async def full_context(request: Request):
+    today = date.today()
+
+    async def fetch_full_context(client: GarminClient) -> Any:
+        return {
+            "as_of": today.isoformat(),
+            "sources": await _fetch_full_context_bundle(client, today),
+            "unsupported_targets": ["nutrition"],
+        }
+
+    return await _with_client(fetch_full_context, request=request)
+
+
+@app.get("/chat-context")
+async def chat_context(request: Request):
+    today = date.today()
+
+    async def fetch_chat_context(client: GarminClient) -> Any:
+        full_context_data, trend_data = await asyncio.gather(
+            _fetch_full_context_bundle(client, today),
+            _fetch_trend_windows(client, today),
+        )
+        return {
+            "as_of": today.isoformat(),
+            "full_context": full_context_data,
+            "historical_context": trend_data,
+            "unsupported_targets": ["nutrition"],
+        }
+
+    return await _with_client(fetch_chat_context, request=request)
