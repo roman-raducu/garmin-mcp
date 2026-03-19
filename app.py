@@ -289,6 +289,22 @@ def _extract(data: Any, *keys: str) -> Any:
     return data
 
 
+def _garmin_retry_after_seconds(response: Any) -> int:
+    default_retry_after = 1800
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return default_retry_after
+
+    retry_after = headers.get("Retry-After")
+    if retry_after is None:
+        return default_retry_after
+
+    try:
+        return max(60, int(retry_after))
+    except (TypeError, ValueError):
+        return default_retry_after
+
+
 def _pending_status_for_browser(browser_session_id: str | None) -> dict[str, Any] | None:
     if not browser_session_id:
         return None
@@ -426,6 +442,14 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
         if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarthHTTPError", "GarthException"}:
             response = getattr(exc, "response", None)
             if response is not None:
+                if response.status_code == 429:
+                    retry_after = _garmin_retry_after_seconds(response)
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Garmin is rate limiting authentication attempts. Wait before trying again.",
+                        headers={"Retry-After": str(retry_after)},
+                    ) from exc
+
                 response_text = (getattr(response, "text", "") or "").strip()
                 detail = f"Garmin authentication failed: HTTP {response.status_code}"
                 if response_text:
@@ -481,10 +505,27 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
         raise
     except Exception as exc:
         if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarminMFACodeError", "GarminAuthError", "GarthException"}:
+            response = getattr(exc, "response", None)
+            if response is not None and response.status_code == 429:
+                retry_after = _garmin_retry_after_seconds(response)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Garmin is rate limiting MFA attempts. Wait before trying again.",
+                    headers={"Retry-After": str(retry_after)},
+                ) from exc
+
             raise HTTPException(status_code=401, detail="The MFA code was not accepted.") from exc
 
         response = getattr(exc, "response", None)
         if response is not None:
+            if response.status_code == 429:
+                retry_after = _garmin_retry_after_seconds(response)
+                raise HTTPException(
+                    status_code=429,
+                    detail="Garmin is rate limiting MFA attempts. Wait before trying again.",
+                    headers={"Retry-After": str(retry_after)},
+                ) from exc
+
             response_text = (getattr(response, "text", "") or "").strip()
             detail = f"Garmin MFA completion failed: HTTP {response.status_code}"
             if response_text:

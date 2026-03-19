@@ -127,6 +127,10 @@
               </button>
             </form>
 
+            <div id="cooldownBox" class="mt-5 hidden rounded-[1.5rem] border border-accent/20 bg-accent/8 px-4 py-3 text-sm leading-6 text-accent">
+              Garmin is rate limiting requests. Try again in <span id="cooldownValue">00:00</span>.
+            </div>
+
             <p id="messageBox" class="mt-5 min-h-[3rem] rounded-[1.5rem] border border-line bg-black/20 px-4 py-3 text-sm leading-6 text-muted">
               Sign in to continue.
             </p>
@@ -140,7 +144,13 @@
       const mfaForm = document.getElementById("mfaForm");
       const messageBox = document.getElementById("messageBox");
       const mfaCodeInput = document.getElementById("mfaCode");
+      const cooldownBox = document.getElementById("cooldownBox");
+      const cooldownValue = document.getElementById("cooldownValue");
+      const loginButton = loginForm.querySelector('button[type="submit"]');
+      const mfaButton = mfaForm.querySelector('button[type="submit"]');
+      const cooldownStorageKey = "garminAuthCooldownUntil";
       let pendingId = null;
+      let cooldownTimer = null;
 
       function setMessage(text, tone = "neutral") {
         const tones = {
@@ -159,6 +169,75 @@
           throw new Error(data.detail || data.message || "Request failed.");
         }
         return data;
+      }
+
+      function formatRemaining(totalSeconds) {
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      }
+
+      function setAuthControlsDisabled(disabled) {
+        loginButton.disabled = disabled;
+        mfaButton.disabled = disabled;
+        loginButton.classList.toggle("opacity-60", disabled);
+        mfaButton.classList.toggle("opacity-60", disabled);
+        loginButton.classList.toggle("cursor-not-allowed", disabled);
+        mfaButton.classList.toggle("cursor-not-allowed", disabled);
+      }
+
+      function clearCooldown() {
+        localStorage.removeItem(cooldownStorageKey);
+        cooldownBox.classList.add("hidden");
+        if (cooldownTimer) {
+          clearInterval(cooldownTimer);
+          cooldownTimer = null;
+        }
+        setAuthControlsDisabled(false);
+      }
+
+      function applyCooldown(seconds) {
+        const cooldownUntil = Date.now() + seconds * 1000;
+        localStorage.setItem(cooldownStorageKey, String(cooldownUntil));
+        syncCooldown();
+      }
+
+      function syncCooldown() {
+        const cooldownUntil = Number(localStorage.getItem(cooldownStorageKey) || 0);
+        const remainingSeconds = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+
+        if (remainingSeconds <= 0) {
+          clearCooldown();
+          return;
+        }
+
+        cooldownBox.classList.remove("hidden");
+        cooldownValue.textContent = formatRemaining(remainingSeconds);
+        setAuthControlsDisabled(true);
+
+        if (cooldownTimer) {
+          clearInterval(cooldownTimer);
+        }
+
+        cooldownTimer = setInterval(() => {
+          const secondsLeft = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
+          if (secondsLeft <= 0) {
+            clearCooldown();
+            return;
+          }
+          cooldownValue.textContent = formatRemaining(secondsLeft);
+        }, 1000);
+      }
+
+      function maybeApplyRateLimit(response) {
+        if (response.status !== 429) {
+          return false;
+        }
+
+        const retryAfter = Number(response.headers.get("Retry-After") || "1800");
+        applyCooldown(Number.isFinite(retryAfter) ? retryAfter : 1800);
+        setMessage("Garmin is rate limiting requests. Wait for the cooldown before trying again.", "warning");
+        return true;
       }
 
       async function hydrateSessionState() {
@@ -194,6 +273,10 @@
           });
           const data = await response.json().catch(() => ({}));
 
+          if (maybeApplyRateLimit(response)) {
+            return;
+          }
+
           if (response.status === 202 && data.status === "mfa_required") {
             pendingId = data.pending_id;
             mfaForm.classList.remove("hidden");
@@ -205,6 +288,7 @@
             throw new Error(data.detail || "Garmin sign-in failed.");
           }
 
+          clearCooldown();
           setMessage("Connected. Opening dashboard...", "success");
           window.location.assign("/dashboard");
         } catch (error) {
@@ -230,7 +314,11 @@
               code: mfaCodeInput.value,
             }),
           });
+          if (maybeApplyRateLimit(response)) {
+            return;
+          }
           await safeJson(response);
+          clearCooldown();
           setMessage("Connected. Opening dashboard...", "success");
           window.location.assign("/dashboard");
         } catch (error) {
@@ -241,6 +329,7 @@
       hydrateSessionState().catch((error) => {
         setMessage(error.message, "error");
       });
+      syncCooldown();
     </script>
   </body>
 </html>
