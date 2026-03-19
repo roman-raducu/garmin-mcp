@@ -1,4 +1,5 @@
 fastapi
 uvicorn
-garminconnect
+garminconnect==0.1.55
+garth==0.4.46
 python-dotenv
