@@ -1,4 +1,5 @@
 fastapi
 uvicorn
-aiogarmin
+aiohttp
+aiogarmin==0.1.4
 python-dotenv
