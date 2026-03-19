@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 import aiohttp
+import garth
 from aiogarmin import GarminAuth, GarminClient
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -37,8 +38,7 @@ class StoredTokens:
 class PendingAuth:
     browser_session_id: str
     email: str
-    auth: GarminAuth
-    session: aiohttp.ClientSession
+    mfa_state: Any
     created_at: float
 
 
@@ -54,6 +54,7 @@ class GarminMfaRequest(BaseModel):
 
 TOKEN_STORE: dict[str, StoredTokens] = {}
 PENDING_AUTHS: dict[str, PendingAuth] = {}
+GARTH_AUTH_LOCK = asyncio.Lock()
 
 
 def _now() -> float:
@@ -83,9 +84,7 @@ def _set_browser_cookie(response: Response, browser_session_id: str) -> None:
 
 
 async def _close_pending_auth(pending_id: str) -> None:
-    pending = PENDING_AUTHS.pop(pending_id, None)
-    if pending and not pending.session.closed:
-        await pending.session.close()
+    PENDING_AUTHS.pop(pending_id, None)
 
 
 async def _cleanup_pending_auths() -> None:
@@ -149,6 +148,28 @@ def _env_tokens() -> StoredTokens | None:
         oauth1_token=oauth1_token,
         oauth2_token=oauth2_token,
         connected_at=0,
+    )
+
+
+def _extract_garth_tokens(result: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if (
+        isinstance(result, tuple)
+        and len(result) == 2
+        and isinstance(result[0], dict)
+        and isinstance(result[1], dict)
+    ):
+        return result[0], result[1]
+
+    client = getattr(garth, "client", None)
+    oauth1_token = getattr(client, "oauth1_token", None)
+    oauth2_token = getattr(client, "oauth2_token", None)
+
+    if isinstance(oauth1_token, dict) and isinstance(oauth2_token, dict):
+        return oauth1_token, oauth2_token
+
+    raise HTTPException(
+        status_code=502,
+        detail="Garmin login succeeded but OAuth tokens were not available.",
     )
 
 
@@ -317,19 +338,25 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
     browser_session_id, needs_cookie = _ensure_browser_session_id(request)
     await _clear_browser_auth(browser_session_id)
 
-    timeout = aiohttp.ClientTimeout(total=30)
-    session = aiohttp.ClientSession(timeout=timeout)
-    auth = GarminAuth(session)
-
     try:
-        login_result = await auth.login(payload.email, payload.password)
-        if getattr(login_result, "mfa_required", False):
+        async with GARTH_AUTH_LOCK:
+            login_result = await asyncio.to_thread(
+                garth.login,
+                payload.email,
+                payload.password,
+                return_on_mfa=True,
+            )
+
+        if (
+            isinstance(login_result, tuple)
+            and len(login_result) == 2
+            and login_result[0] == "needs_mfa"
+        ):
             pending_id = secrets.token_urlsafe(24)
             PENDING_AUTHS[pending_id] = PendingAuth(
                 browser_session_id=browser_session_id,
                 email=payload.email,
-                auth=auth,
-                session=session,
+                mfa_state=login_result[1],
                 created_at=_now(),
             )
             response = JSONResponse(
@@ -344,43 +371,19 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
                 _set_browser_cookie(response, browser_session_id)
             return response
 
+        oauth1_token, oauth2_token = _extract_garth_tokens(login_result)
         TOKEN_STORE[browser_session_id] = StoredTokens(
             email=payload.email,
-            oauth1_token=auth.oauth1_token,
-            oauth2_token=auth.oauth2_token,
+            oauth1_token=oauth1_token,
+            oauth2_token=oauth2_token,
             connected_at=_now(),
         )
-        await session.close()
         response = JSONResponse({"status": "connected", "email": payload.email})
         if needs_cookie:
             _set_browser_cookie(response, browser_session_id)
         return response
     except Exception as exc:
-        if type(exc).__name__ == "GarminMFARequired":
-            pending_id = secrets.token_urlsafe(24)
-            PENDING_AUTHS[pending_id] = PendingAuth(
-                browser_session_id=browser_session_id,
-                email=payload.email,
-                auth=auth,
-                session=session,
-                created_at=_now(),
-            )
-            response = JSONResponse(
-                status_code=202,
-                content={
-                    "status": "mfa_required",
-                    "pending_id": pending_id,
-                    "message": "Enter the MFA code from Garmin Connect.",
-                },
-            )
-            if needs_cookie:
-                _set_browser_cookie(response, browser_session_id)
-            return response
-
-        if not session.closed:
-            await session.close()
-
-        if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarthHTTPError"}:
+        if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarthHTTPError", "GarthException"}:
             raise HTTPException(
                 status_code=401,
                 detail="Garmin authentication failed. Check your email and password.",
@@ -406,14 +409,19 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
         raise HTTPException(status_code=403, detail="This MFA session belongs to a different browser session.")
 
     try:
-        result = await pending.auth.complete_mfa(payload.code)
-        if getattr(result, "mfa_required", False):
-            raise HTTPException(status_code=401, detail="The MFA code was not accepted.")
+        async with GARTH_AUTH_LOCK:
+            result = await asyncio.to_thread(
+                garth.resume_login,
+                pending.mfa_state,
+                payload.code,
+            )
+
+        oauth1_token, oauth2_token = _extract_garth_tokens(result)
 
         TOKEN_STORE[browser_session_id] = StoredTokens(
             email=pending.email,
-            oauth1_token=pending.auth.oauth1_token,
-            oauth2_token=pending.auth.oauth2_token,
+            oauth1_token=oauth1_token,
+            oauth2_token=oauth2_token,
             connected_at=_now(),
         )
         await _close_pending_auth(payload.pending_id)
@@ -424,7 +432,7 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarminMFACodeError"}:
+        if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarminMFACodeError", "GarminAuthError", "GarthException"}:
             raise HTTPException(status_code=401, detail="The MFA code was not accepted.") from exc
 
         logger.exception("Garmin MFA completion failed")

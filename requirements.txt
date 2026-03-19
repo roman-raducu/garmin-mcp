@@ -2,5 +2,6 @@ fastapi
 uvicorn
 aiohttp
 aiogarmin==0.1.4
+garth
 jinja2
 python-dotenv
