@@ -475,6 +475,14 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
         if type(exc).__name__ in {"GarminConnectAuthenticationError", "GarminMFACodeError", "GarminAuthError", "GarthException"}:
             raise HTTPException(status_code=401, detail="The MFA code was not accepted.") from exc
 
+        response = getattr(exc, "response", None)
+        if response is not None:
+            response_text = (getattr(response, "text", "") or "").strip()
+            detail = f"Garmin MFA completion failed: HTTP {response.status_code}"
+            if response_text:
+                detail = f"{detail} - {response_text[:200]}"
+            raise HTTPException(status_code=502, detail=detail) from exc
+
         logger.exception("Garmin MFA completion failed")
         raise HTTPException(
             status_code=502,
