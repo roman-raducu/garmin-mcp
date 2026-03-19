@@ -19,164 +19,223 @@
               sans: ["Space Grotesk", "sans-serif"],
             },
             colors: {
-              fog: "#eef2e8",
-              ink: "#101718",
-              moss: "#194d44",
-              ember: "#e36942",
-              sand: "#d7c8ad",
+              cloud: "#f8fafc",
+              ink: "#0f172a",
+              slate: "#475569",
+              line: "#e2e8f0",
+              brand: "#2563eb",
+              mint: "#10b981",
+              amberish: "#f59e0b",
+            },
+            boxShadow: {
+              soft: "0 20px 60px rgba(15, 23, 42, 0.08)",
             },
           },
         },
       };
     </script>
   </head>
-  <body class="min-h-screen bg-ink text-fog">
-    <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(227,105,66,0.18),_transparent_28%),radial-gradient(circle_at_bottom_right,_rgba(25,77,68,0.42),_transparent_32%),linear-gradient(135deg,_#0c1213,_#121c1d_45%,_#1d2625)]"></div>
-    <main class="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-5 py-8 md:px-8 md:py-10">
-      <section class="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <div class="rounded-[2rem] border border-white/10 bg-white/5 p-8 shadow-2xl shadow-black/20 backdrop-blur">
-          <div class="mb-8 flex items-center gap-3">
-            <div class="h-3 w-3 rounded-full bg-ember"></div>
-            <div class="h-3 w-3 rounded-full bg-sand"></div>
-            <div class="h-3 w-3 rounded-full bg-moss"></div>
-          </div>
-          <p class="mb-3 text-sm uppercase tracking-[0.35em] text-fog/60">Garmin Connector</p>
-          <h1 class="max-w-2xl text-4xl font-bold leading-tight md:text-6xl">
-            Ask your Garmin data instead of digging through Garmin Connect.
-          </h1>
-          <p class="mt-6 max-w-2xl text-base leading-7 text-fog/72 md:text-lg">
-            This Render-hosted prototype signs into Garmin, handles MFA in the browser, and exposes your
-            data on the same origin for the next MCP layer.
-          </p>
-          <div class="mt-8 flex flex-wrap gap-3 text-sm text-fog/70">
-            <span class="rounded-full border border-white/10 bg-white/5 px-4 py-2">Single instance on Render</span>
-            <span class="rounded-full border border-white/10 bg-white/5 px-4 py-2">Session-based sign-in</span>
-            <span class="rounded-full border border-white/10 bg-white/5 px-4 py-2">Ready for custom domain</span>
+  <body class="min-h-screen bg-cloud text-ink">
+    <div class="absolute inset-x-0 top-0 -z-10 h-[34rem] bg-[radial-gradient(circle_at_top_left,_rgba(37,99,235,0.12),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(180deg,_#ffffff,_#f8fafc)]"></div>
+    <div class="absolute inset-0 -z-10 bg-[linear-gradient(rgba(148,163,184,0.10)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.10)_1px,transparent_1px)] bg-[size:32px_32px] [mask-image:linear-gradient(180deg,white,transparent_75%)]"></div>
+
+    <main class="mx-auto flex min-h-screen w-full max-w-7xl flex-col px-5 py-6 md:px-8 md:py-8">
+      <header class="mb-10 flex flex-col gap-4 rounded-full border border-line/80 bg-white/80 px-5 py-4 shadow-soft backdrop-blur md:flex-row md:items-center md:justify-between">
+        <div class="flex items-center gap-3">
+          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-ink text-sm font-bold text-white">GC</div>
+          <div>
+            <div class="text-sm font-medium text-slate">Garmin Chat Connector</div>
+            <div class="text-xs text-slate/70">Hosted on Render, ready for your custom domain</div>
           </div>
         </div>
+        <nav class="flex flex-wrap items-center gap-3 text-sm text-slate">
+          <span class="rounded-full border border-line bg-white px-3 py-2">Garmin sign-in</span>
+          <span class="rounded-full border border-line bg-white px-3 py-2">MFA in browser</span>
+          <span class="rounded-full border border-line bg-white px-3 py-2">{{ service_origin }}</span>
+        </nav>
+      </header>
 
-        <section class="rounded-[2rem] border border-white/10 bg-[#f5efdf] p-6 text-ink shadow-2xl shadow-black/20">
-          <div class="mb-6 flex items-start justify-between gap-4">
-            <div>
-              <p class="text-sm uppercase tracking-[0.3em] text-ink/55">Session</p>
-              <h2 class="mt-2 text-2xl font-bold">Connect your Garmin account</h2>
+      <section class="grid gap-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
+        <div class="space-y-8">
+          <div class="max-w-3xl">
+            <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-brand">
+              Tailwind-style SaaS landing
+              <span class="h-2 w-2 rounded-full bg-mint"></span>
+              Session-ready connector
             </div>
-            <div id="statusBadge" class="rounded-full bg-ink px-3 py-1 text-xs font-medium text-fog">
-              Checking
+            <h1 class="text-4xl font-bold leading-tight tracking-tight md:text-6xl">
+              Your Garmin data, in a cleaner interface built for fast questions.
+            </h1>
+            <p class="mt-5 max-w-2xl text-base leading-8 text-slate md:text-lg">
+              Sign in once, complete MFA in the browser, then pull your daily summary, sleep snapshot,
+              and recent activities without digging through Garmin Connect.
+            </p>
+            <div class="mt-8 flex flex-wrap gap-3">
+              <a href="#connect" class="rounded-2xl bg-ink px-5 py-3 text-sm font-semibold text-white transition hover:bg-brand">
+                Connect Garmin
+              </a>
+              <a href="#queries" class="rounded-2xl border border-line bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:border-brand hover:text-brand">
+                Explore data actions
+              </a>
             </div>
           </div>
 
-          <form id="loginForm" class="space-y-4">
-            <div>
-              <label for="email" class="mb-2 block text-sm font-medium">Garmin email</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                class="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/20"
-                placeholder="you@example.com"
-              />
+          <div class="grid gap-4 sm:grid-cols-3">
+            <div class="rounded-3xl border border-line bg-white p-5 shadow-soft">
+              <div class="text-sm text-slate">Daily overview</div>
+              <div class="mt-2 text-2xl font-bold">Today</div>
+              <p class="mt-2 text-sm leading-6 text-slate">Fast access to summary data, recovery signals and body metrics.</p>
             </div>
-            <div>
-              <label for="password" class="mb-2 block text-sm font-medium">Garmin password</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                class="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 outline-none transition focus:border-moss focus:ring-2 focus:ring-moss/20"
-                placeholder="Your Garmin password"
-              />
+            <div class="rounded-3xl border border-line bg-white p-5 shadow-soft">
+              <div class="text-sm text-slate">Sleep signals</div>
+              <div class="mt-2 text-2xl font-bold">Sleep</div>
+              <p class="mt-2 text-sm leading-6 text-slate">Pull the latest sleep payload and inspect the raw Garmin structure.</p>
             </div>
-            <button
-              type="submit"
-              class="w-full rounded-2xl bg-ink px-4 py-3 text-sm font-semibold text-fog transition hover:bg-moss"
-            >
-              Connect Garmin
-            </button>
-          </form>
-
-          <form id="mfaForm" class="mt-6 hidden space-y-4">
-            <div class="rounded-2xl border border-ember/20 bg-ember/10 p-4 text-sm text-ink/80">
-              Garmin requested MFA. Enter the current verification code.
+            <div class="rounded-3xl border border-line bg-white p-5 shadow-soft">
+              <div class="text-sm text-slate">Recent workouts</div>
+              <div class="mt-2 text-2xl font-bold">Activities</div>
+              <p class="mt-2 text-sm leading-6 text-slate">Check the last logged activities before building the MCP layer.</p>
             </div>
-            <div>
-              <label for="mfaCode" class="mb-2 block text-sm font-medium">MFA code</label>
-              <input
-                id="mfaCode"
-                name="code"
-                inputmode="numeric"
-                autocomplete="one-time-code"
-                class="w-full rounded-2xl border border-ink/10 bg-white px-4 py-3 outline-none transition focus:border-ember focus:ring-2 focus:ring-ember/20"
-                placeholder="123456"
-              />
-            </div>
-            <button
-              type="submit"
-              class="w-full rounded-2xl bg-ember px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
-            >
-              Verify MFA
-            </button>
-          </form>
-
-          <div class="mt-6 flex gap-3">
-            <button
-              id="logoutButton"
-              type="button"
-              class="hidden rounded-2xl border border-ink/15 px-4 py-3 text-sm font-semibold transition hover:bg-ink hover:text-fog"
-            >
-              Sign out
-            </button>
           </div>
 
-          <p id="messageBox" class="mt-6 min-h-[3rem] rounded-2xl bg-white/80 px-4 py-3 text-sm leading-6 text-ink/80">
-            Sign in with Garmin. Once connected, use the data actions below.
-          </p>
-        </section>
-      </section>
-
-      <section class="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-        <div class="rounded-[2rem] border border-white/10 bg-white/5 p-6 backdrop-blur">
-          <div class="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <p class="text-sm uppercase tracking-[0.3em] text-fog/55">Data</p>
-              <h2 class="mt-2 text-2xl font-bold">Quick pulls</h2>
+          <section id="queries" class="rounded-[2rem] border border-line bg-white p-6 shadow-soft md:p-7">
+            <div class="mb-6 flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium uppercase tracking-[0.28em] text-slate/70">Quick Queries</p>
+                <h2 class="mt-2 text-2xl font-bold">Prebuilt-style action cards</h2>
+              </div>
+              <div class="hidden rounded-full border border-line bg-slate-50 px-3 py-2 text-xs text-slate md:block">
+                Same-origin Garmin endpoints
+              </div>
             </div>
-            <div class="rounded-full border border-white/10 px-3 py-1 text-xs text-fog/65">{{ service_origin }}</div>
-          </div>
-          <div class="grid gap-3">
-            <button data-endpoint="/today" class="data-button rounded-2xl bg-moss px-4 py-4 text-left transition hover:brightness-110">
-              <div class="text-sm uppercase tracking-[0.25em] text-fog/60">Today</div>
-              <div class="mt-1 text-lg font-semibold">Daily summary</div>
-            </button>
-            <button data-endpoint="/sleep" class="data-button rounded-2xl bg-white/10 px-4 py-4 text-left transition hover:bg-white/15">
-              <div class="text-sm uppercase tracking-[0.25em] text-fog/60">Sleep</div>
-              <div class="mt-1 text-lg font-semibold">Last sleep snapshot</div>
-            </button>
-            <button data-endpoint="/activities" class="data-button rounded-2xl bg-white/10 px-4 py-4 text-left transition hover:bg-white/15">
-              <div class="text-sm uppercase tracking-[0.25em] text-fog/60">Activities</div>
-              <div class="mt-1 text-lg font-semibold">Recent activities</div>
-            </button>
-          </div>
+            <div class="grid gap-4 md:grid-cols-3">
+              <button data-endpoint="/today" class="data-button group rounded-[1.75rem] border border-line bg-slate-50 p-5 text-left transition hover:-translate-y-1 hover:border-brand hover:bg-white hover:shadow-soft">
+                <div class="flex items-center justify-between">
+                  <span class="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-brand">Today</span>
+                  <span class="text-slate transition group-hover:text-brand">+</span>
+                </div>
+                <div class="mt-5 text-xl font-bold">Daily summary</div>
+                <p class="mt-3 text-sm leading-6 text-slate">Get the current summary payload and inspect Garmin’s daily snapshot.</p>
+              </button>
+              <button data-endpoint="/sleep" class="data-button group rounded-[1.75rem] border border-line bg-slate-50 p-5 text-left transition hover:-translate-y-1 hover:border-mint hover:bg-white hover:shadow-soft">
+                <div class="flex items-center justify-between">
+                  <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-mint">Sleep</span>
+                  <span class="text-slate transition group-hover:text-mint">+</span>
+                </div>
+                <div class="mt-5 text-xl font-bold">Sleep snapshot</div>
+                <p class="mt-3 text-sm leading-6 text-slate">Inspect sleep metrics and confirm what the connector can expose later to chat.</p>
+              </button>
+              <button data-endpoint="/activities" class="data-button group rounded-[1.75rem] border border-line bg-slate-50 p-5 text-left transition hover:-translate-y-1 hover:border-amberish hover:bg-white hover:shadow-soft">
+                <div class="flex items-center justify-between">
+                  <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-[0.25em] text-amber-600">Moves</span>
+                  <span class="text-slate transition group-hover:text-amber-600">+</span>
+                </div>
+                <div class="mt-5 text-xl font-bold">Recent activities</div>
+                <p class="mt-3 text-sm leading-6 text-slate">Load the last activities and test the data before adding natural language tools.</p>
+              </button>
+            </div>
+          </section>
         </div>
 
-        <section class="rounded-[2rem] border border-white/10 bg-[#0d1415]/90 p-6 shadow-2xl shadow-black/20">
-          <div class="mb-5 flex items-center justify-between gap-3">
-            <div>
-              <p class="text-sm uppercase tracking-[0.3em] text-fog/55">Response</p>
-              <h2 class="mt-2 text-2xl font-bold">Live Garmin payload</h2>
+        <div class="space-y-6" id="connect">
+          <section class="rounded-[2rem] border border-line bg-white p-6 shadow-soft md:p-7">
+            <div class="mb-6 flex items-start justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium uppercase tracking-[0.28em] text-slate/70">Session</p>
+                <h2 class="mt-2 text-3xl font-bold">Connect your Garmin account</h2>
+                <p class="mt-3 text-sm leading-6 text-slate">This browser session stores the Garmin tokens in memory on the Render app.</p>
+              </div>
+              <div id="statusBadge" class="rounded-full bg-slate-900 px-3 py-2 text-xs font-medium text-white">
+                Checking
+              </div>
             </div>
-            <button
-              id="clearOutput"
-              type="button"
-              class="rounded-full border border-white/10 px-3 py-1 text-xs text-fog/70 transition hover:bg-white/10"
-            >
-              Clear
-            </button>
-          </div>
-          <pre id="output" class="min-h-[26rem] overflow-auto rounded-[1.5rem] bg-black/30 p-5 text-sm leading-6 text-fog/85">No data loaded yet.</pre>
-        </section>
+
+            <form id="loginForm" class="space-y-4">
+              <div>
+                <label for="email" class="mb-2 block text-sm font-medium text-ink">Garmin email</label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  required
+                  class="w-full rounded-2xl border border-line bg-slate-50 px-4 py-3 text-ink outline-none transition focus:border-brand focus:bg-white focus:ring-4 focus:ring-blue-100"
+                  placeholder="you@example.com"
+                />
+              </div>
+              <div>
+                <label for="password" class="mb-2 block text-sm font-medium text-ink">Garmin password</label>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  required
+                  class="w-full rounded-2xl border border-line bg-slate-50 px-4 py-3 text-ink outline-none transition focus:border-brand focus:bg-white focus:ring-4 focus:ring-blue-100"
+                  placeholder="Your Garmin password"
+                />
+              </div>
+              <button
+                type="submit"
+                class="w-full rounded-2xl bg-ink px-4 py-3 text-sm font-semibold text-white transition hover:bg-brand"
+              >
+                Connect Garmin
+              </button>
+            </form>
+
+            <form id="mfaForm" class="mt-6 hidden space-y-4 rounded-[1.75rem] border border-amber-200 bg-amber-50 p-4">
+              <div class="text-sm leading-6 text-slate">
+                Garmin requested MFA. Enter the current verification code to finalize the session.
+              </div>
+              <div>
+                <label for="mfaCode" class="mb-2 block text-sm font-medium text-ink">MFA code</label>
+                <input
+                  id="mfaCode"
+                  name="code"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  class="w-full rounded-2xl border border-amber-200 bg-white px-4 py-3 text-ink outline-none transition focus:border-amberish focus:ring-4 focus:ring-amber-100"
+                  placeholder="123456"
+                />
+              </div>
+              <button
+                type="submit"
+                class="w-full rounded-2xl bg-amberish px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+              >
+                Verify MFA
+              </button>
+            </form>
+
+            <div class="mt-6 flex gap-3">
+              <button
+                id="logoutButton"
+                type="button"
+                class="hidden rounded-2xl border border-line bg-white px-4 py-3 text-sm font-semibold text-ink transition hover:border-ink hover:bg-slate-50"
+              >
+                Sign out
+              </button>
+            </div>
+
+            <p id="messageBox" class="mt-6 min-h-[3rem] rounded-[1.5rem] border border-line bg-slate-50 px-4 py-3 text-sm leading-6 text-slate">
+              Sign in with Garmin. Once connected, use the data actions below.
+            </p>
+          </section>
+
+          <section class="rounded-[2rem] border border-line bg-slate-950 p-6 text-slate-100 shadow-soft md:p-7">
+            <div class="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium uppercase tracking-[0.28em] text-slate-400">Response</p>
+                <h2 class="mt-2 text-2xl font-bold text-white">Live Garmin payload</h2>
+              </div>
+              <button
+                id="clearOutput"
+                type="button"
+                class="rounded-full border border-white/10 px-3 py-2 text-xs text-slate-300 transition hover:bg-white/10"
+              >
+                Clear
+              </button>
+            </div>
+            <pre id="output" class="min-h-[28rem] overflow-auto rounded-[1.5rem] border border-white/10 bg-black/20 p-5 text-sm leading-6 text-slate-200">No data loaded yet.</pre>
+          </section>
+        </div>
       </section>
     </main>
 
@@ -192,20 +251,20 @@
 
       function setMessage(text, tone = "neutral") {
         const tones = {
-          neutral: "bg-white/80 text-ink/80",
-          success: "bg-moss/10 text-ink",
-          warning: "bg-ember/12 text-ink",
+          neutral: "border border-line bg-slate-50 text-slate",
+          success: "border border-emerald-200 bg-emerald-50 text-emerald-900",
+          warning: "border border-amber-200 bg-amber-50 text-amber-900",
           error: "bg-red-100 text-red-900",
         };
-        messageBox.className = `mt-6 min-h-[3rem] rounded-2xl px-4 py-3 text-sm leading-6 ${tones[tone] || tones.neutral}`;
+        messageBox.className = `mt-6 min-h-[3rem] rounded-[1.5rem] px-4 py-3 text-sm leading-6 ${tones[tone] || tones.neutral}`;
         messageBox.textContent = text;
       }
 
       function setConnectedUi(connected, email) {
         statusBadge.textContent = connected ? "Connected" : "Not connected";
         statusBadge.className = connected
-          ? "rounded-full bg-moss px-3 py-1 text-xs font-medium text-white"
-          : "rounded-full bg-ink px-3 py-1 text-xs font-medium text-fog";
+          ? "rounded-full bg-mint px-3 py-2 text-xs font-medium text-white"
+          : "rounded-full bg-slate-900 px-3 py-2 text-xs font-medium text-white";
         logoutButton.classList.toggle("hidden", !connected);
         if (connected && email) {
           setMessage(`Connected as ${email}. You can query Garmin data now.`, "success");
