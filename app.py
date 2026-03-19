@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from garth.sso import resume_login as garth_resume_login
 from pydantic import BaseModel
 
 load_dotenv()
@@ -152,19 +153,35 @@ def _env_tokens() -> StoredTokens | None:
 
 
 def _extract_garth_tokens(result: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    def token_to_dict(token: Any) -> dict[str, Any] | None:
+        if isinstance(token, dict):
+            return token
+        if hasattr(token, "model_dump"):
+            return token.model_dump()
+        if hasattr(token, "dict"):
+            return token.dict()
+        if hasattr(token, "__dict__"):
+            return {
+                key: value
+                for key, value in vars(token).items()
+                if not key.startswith("_")
+            }
+        return None
+
     if (
         isinstance(result, tuple)
         and len(result) == 2
-        and isinstance(result[0], dict)
-        and isinstance(result[1], dict)
     ):
-        return result[0], result[1]
+        oauth1_token = token_to_dict(result[0])
+        oauth2_token = token_to_dict(result[1])
+        if oauth1_token and oauth2_token:
+            return oauth1_token, oauth2_token
 
     client = getattr(garth, "client", None)
-    oauth1_token = getattr(client, "oauth1_token", None)
-    oauth2_token = getattr(client, "oauth2_token", None)
+    oauth1_token = token_to_dict(getattr(client, "oauth1_token", None))
+    oauth2_token = token_to_dict(getattr(client, "oauth2_token", None))
 
-    if isinstance(oauth1_token, dict) and isinstance(oauth2_token, dict):
+    if oauth1_token and oauth2_token:
         return oauth1_token, oauth2_token
 
     raise HTTPException(
@@ -434,7 +451,7 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
     try:
         async with GARTH_AUTH_LOCK:
             result = await asyncio.to_thread(
-                garth.resume_login,
+                garth_resume_login,
                 pending.mfa_state,
                 payload.code,
             )
