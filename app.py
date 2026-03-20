@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import json
 import logging
 import os
+import pickle
 import secrets
 import sqlite3
 import threading
@@ -212,7 +214,26 @@ def _token_to_dict(token: Any) -> dict[str, Any] | None:
     return None
 
 
+def _serialize_token(token: dict[str, Any]) -> str:
+    try:
+        return f"json:{json.dumps(token)}"
+    except TypeError:
+        payload = pickle.dumps(token, protocol=pickle.HIGHEST_PROTOCOL)
+        return f"pickle:{base64.b64encode(payload).decode('ascii')}"
+
+
+def _deserialize_token(raw: str) -> dict[str, Any]:
+    if raw.startswith("json:"):
+        return json.loads(raw[5:])
+    if raw.startswith("pickle:"):
+        payload = base64.b64decode(raw[7:].encode("ascii"))
+        return pickle.loads(payload)
+    return json.loads(raw)
+
+
 def _save_browser_tokens(browser_session_id: str, stored_tokens: StoredTokens) -> None:
+    oauth1_serialized = _serialize_token(stored_tokens.oauth1_token)
+    oauth2_serialized = _serialize_token(stored_tokens.oauth2_token)
     TOKEN_STORE[browser_session_id] = stored_tokens
     with TOKEN_DB_LOCK:
         with sqlite3.connect(TOKEN_DB_PATH) as connection:
@@ -234,8 +255,8 @@ def _save_browser_tokens(browser_session_id: str, stored_tokens: StoredTokens) -
                 (
                     browser_session_id,
                     stored_tokens.email,
-                    json.dumps(stored_tokens.oauth1_token),
-                    json.dumps(stored_tokens.oauth2_token),
+                    oauth1_serialized,
+                    oauth2_serialized,
                     stored_tokens.connected_at,
                 ),
             )
@@ -266,8 +287,8 @@ def _load_browser_tokens(browser_session_id: str | None) -> StoredTokens | None:
 
     stored_tokens = StoredTokens(
         email=row[0],
-        oauth1_token=json.loads(row[1]),
-        oauth2_token=json.loads(row[2]),
+        oauth1_token=_deserialize_token(row[1]),
+        oauth2_token=_deserialize_token(row[2]),
         connected_at=float(row[3]),
     )
     TOKEN_STORE[browser_session_id] = stored_tokens
