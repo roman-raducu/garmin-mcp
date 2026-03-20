@@ -67,6 +67,17 @@ CHARLIE_LLM_API_KEY=...
 CHARLIE_LLM_TIMEOUT_SECONDS=20
 ```
 
+To route across multiple providers sequentially, add for example:
+
+```env
+CHARLIE_LLM_PROVIDER_ORDER=groq,openrouter,huggingface,ollama
+CHARLIE_LLM_MODEL_GROQ=openai/gpt-oss-20b
+CHARLIE_LLM_MODEL_OPENROUTER=openrouter/auto
+CHARLIE_LLM_MODEL_HUGGINGFACE=Qwen/Qwen3-32B
+```
+
+The app will try configured providers in order and fall back if one is missing or unavailable.
+
 Supported hosted provider presets:
 
 - `groq` -> `https://api.groq.com/openai/v1`

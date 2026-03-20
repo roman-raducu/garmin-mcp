@@ -50,47 +50,53 @@
     <div id="mobileBackdrop" class="pointer-events-none fixed inset-0 z-30 bg-black/60 opacity-0 transition xl:hidden"></div>
 
     <main class="mx-auto flex h-[100dvh] max-w-7xl flex-col overflow-hidden px-4 py-4 md:px-8 md:py-8">
-      <header class="mb-4 flex items-center justify-between gap-3 rounded-[1.5rem] border border-line bg-panel/90 px-4 py-3 shadow-glow backdrop-blur md:mb-6 md:px-5 md:py-4">
-        <div class="flex items-center gap-3">
-          <button
-            id="overviewToggle"
-            type="button"
-            class="inline-flex h-11 w-11 items-center justify-center rounded-full border border-line bg-black/20 text-ink transition hover:border-accent hover:text-accent xl:hidden"
-            aria-label="Open menu"
-          >
-            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h16"/>
-            </svg>
-          </button>
-          <img src="/logo.png" alt="CharlieChat" class="h-11 w-11 object-contain" />
-          <h1 class="text-xl font-bold text-ink md:text-2xl">CharlieChat</h1>
+      <header class="mb-4 flex flex-col gap-3 rounded-[1.5rem] border border-line bg-panel/90 px-4 py-3 shadow-glow backdrop-blur md:mb-6 md:px-5 md:py-4">
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex min-w-0 items-center gap-3">
+            <img src="/logo.png" alt="CharlieChat" class="h-11 w-11 object-contain" />
+            <div class="min-w-0">
+              <h1 class="truncate text-xl font-bold text-ink md:text-2xl">CharlieChat</h1>
+              <div class="hidden text-sm text-muted lg:block">{{ email }}</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              id="overviewToggle"
+              type="button"
+              class="inline-flex h-11 w-11 items-center justify-center rounded-full border border-line bg-black/20 text-ink transition hover:border-accent hover:text-accent xl:hidden"
+              aria-label="Open menu"
+            >
+              <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h16"/>
+              </svg>
+            </button>
+            <button
+              id="logoutButtonDesktop"
+              type="button"
+              class="hidden rounded-full border border-line bg-black/20 px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent xl:inline-flex"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
-        <div class="flex flex-wrap items-center justify-end gap-2 md:gap-3">
-          <div id="deviceChip" class="hidden items-center gap-3 rounded-full border border-line bg-black/20 px-3 py-2 text-sm text-muted">
+        <div class="flex items-center gap-2 xl:justify-end">
+          <div id="deviceChip" class="hidden min-w-0 flex-1 items-center gap-3 rounded-full border border-line bg-black/20 px-3 py-2 text-sm text-muted xl:max-w-md xl:flex-initial">
             <img id="deviceChipImage" alt="" class="h-8 w-8 rounded-full object-cover" />
-            <div class="flex items-center gap-2">
+            <div class="flex min-w-0 items-center gap-2">
               <span id="deviceChipDot" class="h-2.5 w-2.5 rounded-full bg-line"></span>
-              <span id="deviceChipLabel"></span>
+              <span id="deviceChipLabel" class="truncate"></span>
             </div>
           </div>
           <button
             id="notificationToggle"
             type="button"
-            class="relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-line bg-black/20 text-ink transition hover:border-accent hover:text-accent"
+            class="relative inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line bg-black/20 text-ink transition hover:border-accent hover:text-accent"
             aria-label="Notifications"
           >
             <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0a3 3 0 1 1-6 0m6 0H9"/>
             </svg>
             <span id="notificationCount" class="absolute -right-1 -top-1 hidden min-w-[1.25rem] rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-black">0</span>
-          </button>
-          <div class="hidden rounded-full border border-line bg-black/20 px-4 py-2 text-sm text-muted lg:block">{{ email }}</div>
-          <button
-            id="logoutButton"
-            type="button"
-            class="rounded-full border border-line bg-black/20 px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent"
-          >
-            Sign out
           </button>
         </div>
       </header>
@@ -150,6 +156,14 @@
               </div>
             </section>
 
+            <button
+              id="logoutButtonMenu"
+              type="button"
+              class="w-full rounded-[1.25rem] border border-line bg-black/20 px-4 py-3 text-left text-sm font-semibold text-ink transition hover:border-accent hover:text-accent xl:hidden"
+            >
+              Sign out
+            </button>
+
             <div id="shortcutList" class="space-y-3">
               <div class="rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-sm text-muted">Loading shortcuts...</div>
             </div>
@@ -200,7 +214,7 @@
             </form>
           </div>
 
-          <div id="analyticsView" class="hidden min-h-0 flex-1 flex-col">
+          <div id="analyticsView" class="hidden min-h-0 flex-1 flex-col overflow-hidden">
             <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div class="inline-flex rounded-full border border-line bg-black/20 p-1">
                 <button data-range="7d" class="analytics-range rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-black">7d</button>
@@ -211,7 +225,7 @@
               <div id="analyticsMeta" class="text-sm text-muted"></div>
             </div>
             <div id="analyticsInsights" class="grid gap-3 md:grid-cols-2"></div>
-            <div id="analyticsCharts" class="mt-4 grid min-h-0 flex-1 gap-4 overflow-y-auto pr-1 md:grid-cols-2"></div>
+            <div id="analyticsCharts" class="mt-4 grid min-h-0 flex-1 content-start gap-4 overflow-y-auto pb-6 pr-1 md:grid-cols-2"></div>
           </div>
         </section>
       </section>
@@ -273,7 +287,7 @@
       const chatForm = document.getElementById("chatForm");
       const chatInput = document.getElementById("chatInput");
       const sendButton = document.getElementById("sendButton");
-      const logoutButton = document.getElementById("logoutButton");
+      const logoutButtons = document.querySelectorAll("#logoutButtonDesktop, #logoutButtonMenu");
       let analyticsPayload = null;
       let activeAnalyticsRange = "30d";
 
@@ -854,12 +868,12 @@
         });
       }
 
-      async function loadShortcuts() {
+      async function loadShortcuts(forceRefresh = false) {
         setMessage("Loading shortcut summaries...", "neutral");
         analyticsPayload = null;
         shortcutList.innerHTML = `<div class="rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-sm text-muted">Loading shortcuts...</div>`;
         try {
-          const response = await fetch("/api/shortcuts");
+          const response = await fetch(forceRefresh ? "/api/shortcuts?force_refresh=1" : "/api/shortcuts");
           const data = await safeJson(response);
           const shortcuts = data.shortcuts;
           renderHistoryMeta(data.history || {});
@@ -882,9 +896,9 @@
         }
       }
 
-      async function loadAnalytics() {
+      async function loadAnalytics(forceRefresh = false) {
         try {
-          const response = await fetch("/api/analytics");
+          const response = await fetch(forceRefresh ? "/api/analytics?force_refresh=1" : "/api/analytics");
           const data = await safeJson(response);
           renderAnalytics(data.analytics || {});
         } catch (error) {
@@ -1030,7 +1044,10 @@
       refreshOverviewButton.addEventListener("click", async () => {
         refreshOverviewButton.disabled = true;
         try {
-          await loadShortcuts();
+          await loadShortcuts(true);
+          if (!analyticsView.classList.contains("hidden")) {
+            await loadAnalytics(true);
+          }
           setMessage("Current Garmin data refreshed.", "success");
         } catch (error) {
           setMessage(error.message, "error");
@@ -1039,14 +1056,16 @@
         }
       });
 
-      logoutButton.addEventListener("click", async () => {
-        try {
-          const response = await fetch("/api/logout", { method: "POST" });
-          await safeJson(response);
-          window.location.assign("/");
-        } catch (error) {
-          setMessage(error.message, "error");
-        }
+      logoutButtons.forEach((button) => {
+        button.addEventListener("click", async () => {
+          try {
+            const response = await fetch("/api/logout", { method: "POST" });
+            await safeJson(response);
+            window.location.assign("/");
+          } catch (error) {
+            setMessage(error.message, "error");
+          }
+        });
       });
 
       clearChat();

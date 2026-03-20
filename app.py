@@ -85,6 +85,27 @@ TREND_WINDOWS: tuple[tuple[str, str, int | None, int | None], ...] = (
     ("9m", "Last 9 months", None, 9),
     ("12m", "Last 12 months", None, 12),
 )
+ZERO_IS_MISSING_METRICS = {
+    "training_readiness",
+    "acute_load_ratio",
+    "vo2max",
+    "hrv_last_night_avg",
+    "hrv_weekly_avg",
+    "weight_kg",
+    "body_fat_pct",
+    "fitness_age",
+    "endurance_score",
+    "hill_score",
+    "spo2_average",
+    "spo2_latest",
+}
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _init_token_db() -> None:
@@ -597,6 +618,39 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
+def _coerce_optional_float(value: Any) -> float | None:
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_optional_int(value: Any) -> int | None:
+    if value in (None, "", [], {}):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sanitize_metric_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(snapshot)
+    for key in ZERO_IS_MISSING_METRICS:
+        value = sanitized.get(key)
+        if value in (None, "", [], {}):
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric_value == 0:
+            sanitized[key] = None
+    return sanitized
+
+
 def _format_minutes(value: Any) -> str | None:
     minutes = _coerce_int(value)
     if minutes <= 0:
@@ -682,6 +736,7 @@ def _normalize_activities(raw_activities: Any) -> list[dict[str, Any]]:
         normalized.append(
             {
                 "date": activity_date,
+                "activity_id": _coerce_int(item.get("activityId") or item.get("id")),
                 "type": _extract_activity_type(item),
                 "distance_km": _coerce_float(item.get("distance")) / 1000,
                 "duration_min": _coerce_float(item.get("duration")) / 60,
@@ -689,6 +744,7 @@ def _normalize_activities(raw_activities: Any) -> list[dict[str, Any]]:
                 "calories": _coerce_float(item.get("calories")),
                 "elevation_gain_m": _coerce_float(item.get("elevationGain")),
                 "average_hr": _coerce_float(item.get("averageHR") or item.get("averageHr")),
+                "name": item.get("activityName"),
             }
         )
     return normalized
@@ -914,6 +970,7 @@ def _training_status_payload_map(training_status_data: Any, *keys: str) -> dict[
 
 def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[str, Any]:
     summary_data = _source_payload(bundle, "summary")
+    summary_raw_data = _source_payload(bundle, "summary_raw")
     daily_steps_today = _source_payload(bundle, "daily_steps_today")
     core_data = _source_payload(bundle, "core")
     body_data = _source_payload(bundle, "body")
@@ -955,29 +1012,35 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
         "calendar_date": snapshot_date.isoformat(),
         "steps": _coerce_int(_first_present(
             _deep_find_first(daily_steps_today, {"totalSteps"}),
+            summary_raw_data.get("totalSteps") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("totalSteps") if isinstance(summary_data, dict) else None,
             core_data.get("totalSteps") if isinstance(core_data, dict) else None,
         )),
         "step_goal": _coerce_int(_first_present(
             _deep_find_first(daily_steps_today, {"stepGoal"}),
+            summary_raw_data.get("dailyStepGoal") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("dailyStepGoal") if isinstance(summary_data, dict) else None,
             core_data.get("dailyStepGoal") if isinstance(core_data, dict) else None,
         )),
         "distance_m": _coerce_float(_first_present(
             _deep_find_first(daily_steps_today, {"totalDistance"}),
+            summary_raw_data.get("totalDistanceMeters") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("totalDistanceMeters") if isinstance(summary_data, dict) else None,
             core_data.get("totalDistanceMeters") if isinstance(core_data, dict) else None,
             summary_data.get("wellnessDistanceMeters") if isinstance(summary_data, dict) else None,
         )),
         "active_kcal": _coerce_float(_first_present(
+            summary_raw_data.get("activeKilocalories") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("activeKilocalories") if isinstance(summary_data, dict) else None,
             core_data.get("activeKilocalories") if isinstance(core_data, dict) else None,
         )),
         "resting_hr": _coerce_int(_first_present(
+            summary_raw_data.get("restingHeartRate") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("restingHeartRate") if isinstance(summary_data, dict) else None,
             core_data.get("restingHeartRate") if isinstance(core_data, dict) else None,
         )),
         "sleep_score": _coerce_int(_first_present(
+            summary_raw_data.get("sleepScore") if isinstance(summary_raw_data, dict) else None,
             core_data.get("sleepScore") if isinstance(core_data, dict) else None,
             summary_data.get("sleepScore") if isinstance(summary_data, dict) else None,
         )),
@@ -996,14 +1059,17 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
             summary_data.get("bodyBatteryLowestValue") if isinstance(summary_data, dict) else None,
         )),
         "stress_avg": _coerce_int(_first_present(
+            summary_raw_data.get("averageStressLevel") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("averageStressLevel") if isinstance(summary_data, dict) else None,
             core_data.get("averageStressLevel") if isinstance(core_data, dict) else None,
         )),
         "stress_max": _coerce_int(_first_present(
+            summary_raw_data.get("maxStressLevel") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("maxStressLevel") if isinstance(summary_data, dict) else None,
             core_data.get("maxStressLevel") if isinstance(core_data, dict) else None,
         )),
         "stress_qualifier": _humanize_token(_first_present(
+            summary_raw_data.get("stressQualifier") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("stressQualifier") if isinstance(summary_data, dict) else None,
             core_data.get("stressQualifier") if isinstance(core_data, dict) else None,
         )),
@@ -1018,24 +1084,24 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
             summary_data.get("latestSpo2") if isinstance(summary_data, dict) else None,
             core_data.get("latestSpo2") if isinstance(core_data, dict) else None,
         )),
-        "spo2_average": _coerce_float(_first_present(
+        "spo2_average": _coerce_optional_float(_first_present(
             summary_data.get("averageSpo2") if isinstance(summary_data, dict) else None,
             core_data.get("averageSpo2") if isinstance(core_data, dict) else None,
         )),
-        "training_readiness": _first_present(
+        "training_readiness": _coerce_optional_int(_first_present(
             _deep_find_first(training_readiness_data or training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
             _deep_find_first(training_readiness_data or training_data, {"score", "value"}),
-        ),
+        )),
         "training_status": _humanize_token(_first_present(
             training_status_payload.get("trainingStatusFeedbackPhrase") if training_status_payload else None,
             training_balance_payload.get("trainingBalanceFeedbackPhrase") if training_balance_payload else None,
             _deep_find_first(training_status_data or training_data, {"trainingStatusLabel", "trainingStatusText"}),
         )),
-        "acute_load_ratio": _coerce_float(_deep_find_first(
+        "acute_load_ratio": _coerce_optional_float(_deep_find_first(
             training_status_payload,
             {"dailyAcuteChronicWorkloadRatio"},
         )),
-        "vo2max": _coerce_float(_deep_find_first(
+        "vo2max": _coerce_optional_float(_deep_find_first(
             training_status_data,
             {"vo2MaxPreciseValue", "vo2MaxValue"},
         )),
@@ -1043,8 +1109,8 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
             hrv_summary.get("status") if isinstance(hrv_summary, dict) else None,
             hrv_summary.get("feedbackPhrase") if isinstance(hrv_summary, dict) else None,
         )),
-        "hrv_last_night_avg": _coerce_int(hrv_summary.get("lastNightAvg") if isinstance(hrv_summary, dict) else None),
-        "hrv_weekly_avg": _coerce_int(hrv_summary.get("weeklyAvg") if isinstance(hrv_summary, dict) else None),
+        "hrv_last_night_avg": _coerce_optional_int(hrv_summary.get("lastNightAvg") if isinstance(hrv_summary, dict) else None),
+        "hrv_weekly_avg": _coerce_optional_int(hrv_summary.get("weeklyAvg") if isinstance(hrv_summary, dict) else None),
         "hydration_ml": _coerce_int(_first_present(
             hydration_data.get("valueInML") if isinstance(hydration_data, dict) else None,
             body_data.get("valueInML") if isinstance(body_data, dict) else None,
@@ -1053,22 +1119,24 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
             hydration_data.get("goalInML") if isinstance(hydration_data, dict) else None,
             body_data.get("goalInML") if isinstance(body_data, dict) else None,
         )),
-        "weight_kg": _coerce_float(_first_present(
+        "weight_kg": _coerce_optional_float(_first_present(
             body_data.get("weightKg") if isinstance(body_data, dict) else None,
             body_data.get("weight") if isinstance(body_data, dict) else None,
             _deep_find_first(body_data, {"weightKg", "weight", "weightInKg", "weightKG"}),
         )),
-        "body_fat_pct": _coerce_float(_first_present(
+        "body_fat_pct": _coerce_optional_float(_first_present(
             body_data.get("bodyFat") if isinstance(body_data, dict) else None,
             _deep_find_first(body_data, {"bodyFat", "bodyFatPercent", "bodyFatPercentage"}),
         )),
-        "fitness_age": _coerce_float(_first_present(
+        "fitness_age": _coerce_optional_float(_first_present(
             body_data.get("fitnessAge") if isinstance(body_data, dict) else None,
             _deep_find_first(fitness_age_data or body_data, {"fitnessAge", "fitnessAgeValue", "value"}),
         )),
-        "endurance_score": _coerce_float(_deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"})),
-        "hill_score": _coerce_float(_deep_find_first(hill_score_data, {"score", "hillScore", "value"})),
+        "endurance_score": _coerce_optional_float(_deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"})),
+        "hill_score": _coerce_optional_float(_deep_find_first(hill_score_data, {"score", "hillScore", "value"})),
         "last_sync_time": _first_present(
+            summary_raw_data.get("lastSyncTimestampGMT") if isinstance(summary_raw_data, dict) else None,
+            summary_raw_data.get("lastSyncTimestampLocal") if isinstance(summary_raw_data, dict) else None,
             summary_data.get("lastSyncTimestampGMT") if isinstance(summary_data, dict) else None,
             summary_data.get("lastSyncTimestampLocal") if isinstance(summary_data, dict) else None,
         ),
@@ -1193,7 +1261,7 @@ def _load_metric_snapshots(email: str, start_date: date, end_date: date) -> list
                 (email, start_date.isoformat(), end_date.isoformat()),
             ).fetchall()
 
-    return [json.loads(row[0]) for row in rows]
+    return [_sanitize_metric_snapshot(json.loads(row[0])) for row in rows]
 
 
 def _series_from_snapshots(snapshots: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -1740,9 +1808,26 @@ def _build_chat_brief(
 
 def _extract_recent_activities(bundle: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
     activity_payload = _source_payload(bundle, "activity")
+    recent_range_payload = _source_payload(bundle, "activities_by_date_recent")
+    combined = _normalize_activities(activity_payload) + _normalize_activities(recent_range_payload)
+
+    deduped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in combined:
+        activity_id = item.get("activity_id")
+        key = (
+            activity_id or 0,
+            item.get("date"),
+            item.get("type"),
+            round(float(item.get("distance_km") or 0), 3),
+            round(float(item.get("duration_min") or 0), 1),
+        )
+        existing = deduped.get(key)
+        if existing is None or (item.get("average_hr") or 0) > (existing.get("average_hr") or 0):
+            deduped[key] = item
+
     activities = sorted(
-        _normalize_activities(activity_payload),
-        key=lambda item: item["date"],
+        deduped.values(),
+        key=lambda item: (item["date"], item.get("activity_id") or 0),
         reverse=True,
     )
     return activities[:limit]
@@ -2530,6 +2615,47 @@ def _openai_compatible_api_key() -> str | None:
     )
 
 
+def _provider_api_key(provider: str) -> str | None:
+    provider = provider.strip().lower()
+    if provider == "groq":
+        return os.getenv("GROQ_API_KEY") or os.getenv("CHARLIE_LLM_API_KEY")
+    if provider == "openrouter":
+        return os.getenv("OPENROUTER_API_KEY") or os.getenv("CHARLIE_LLM_API_KEY")
+    if provider in {"huggingface", "hf"}:
+        return os.getenv("HUGGINGFACE_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("CHARLIE_LLM_API_KEY")
+    return None
+
+
+def _provider_base_url(provider: str) -> str:
+    provider = provider.strip().lower()
+    explicit = os.getenv(f"CHARLIE_LLM_BASE_URL_{provider.upper()}")
+    if explicit:
+        return explicit.rstrip("/")
+    if provider == "groq":
+        return "https://api.groq.com/openai/v1"
+    if provider == "openrouter":
+        return "https://openrouter.ai/api/v1"
+    if provider in {"huggingface", "hf"}:
+        return "https://router.huggingface.co/v1"
+    if provider == "ollama":
+        return _ollama_base_url()
+    return ""
+
+
+def _llm_provider_order(question: str) -> list[str]:
+    configured = os.getenv("CHARLIE_LLM_PROVIDER_ORDER", "groq,openrouter,huggingface,ollama")
+    providers = [item.strip().lower() for item in configured.split(",") if item.strip()]
+    complex_prompt = _question_matches(
+        question,
+        "compare", "versus", "trend", "pattern", "interpret", "why", "insight", "correlate",
+        "compară", "compara", "trend", "pattern", "interpretează", "de ce", "insight", "corel",
+    )
+
+    if not complex_prompt and "ollama" in providers:
+        providers = ["ollama"] + [item for item in providers if item != "ollama"]
+    return providers
+
+
 def _build_ollama_prompt(
     question: str,
     full_context_data: dict[str, Any],
@@ -2664,9 +2790,9 @@ async def _ask_ollama(
     return content or None
 
 
-def _openai_compatible_headers() -> dict[str, str] | None:
-    api_key = _openai_compatible_api_key()
-    base_url = _openai_compatible_base_url()
+def _openai_compatible_headers(provider: str) -> dict[str, str] | None:
+    api_key = _provider_api_key(provider)
+    base_url = _provider_base_url(provider)
     if not api_key or not base_url:
         return None
 
@@ -2674,25 +2800,26 @@ def _openai_compatible_headers() -> dict[str, str] | None:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    if _llm_provider() == "openrouter":
+    if provider == "openrouter":
         headers["HTTP-Referer"] = os.getenv("CHARLIE_LLM_SITE_URL", "https://garmin.raducu.co")
         headers["X-Title"] = os.getenv("CHARLIE_LLM_APP_NAME", "CharlieChat")
     return headers
 
 
 async def _ask_openai_compatible_llm(
+    provider: str,
     question: str,
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
     history_context: dict[str, Any] | None = None,
 ) -> str | None:
-    headers = _openai_compatible_headers()
+    headers = _openai_compatible_headers(provider)
     if headers is None or not _llm_enabled():
         return None
 
     timeout = aiohttp.ClientTimeout(total=min(_llm_timeout_seconds(), 18.0))
     payload = {
-        "model": _llm_model(),
+        "model": os.getenv(f"CHARLIE_LLM_MODEL_{provider.upper()}") or _llm_model(),
         "temperature": 0.2,
         "messages": [
             {
@@ -2720,7 +2847,7 @@ async def _ask_openai_compatible_llm(
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                f"{_openai_compatible_base_url()}/chat/completions",
+                f"{_provider_base_url(provider)}/chat/completions",
                 headers=headers,
                 json=payload,
             ) as response:
@@ -2753,21 +2880,21 @@ async def _ask_configured_llm(
     trend_data: dict[str, Any],
     history_context: dict[str, Any] | None = None,
 ) -> tuple[str | None, str]:
-    provider = _llm_provider()
-    if provider == "ollama":
-        return await _ask_ollama(question, full_context_data, trend_data, history_context=history_context), "ollama"
+    for provider in _llm_provider_order(question):
+        if provider == "ollama":
+            answer = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
+        else:
+            answer = await _ask_openai_compatible_llm(
+                provider,
+                question,
+                full_context_data,
+                trend_data,
+                history_context=history_context,
+            )
+        if answer:
+            return answer, provider
 
-    answer = await _ask_openai_compatible_llm(
-        question,
-        full_context_data,
-        trend_data,
-        history_context=history_context,
-    )
-    if answer:
-        return answer, provider
-
-    fallback = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
-    return fallback, "ollama"
+    return None, "heuristic"
 
 
 async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
@@ -2815,6 +2942,7 @@ async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, A
 async def _fetch_metric_snapshot_bundle(client: GarminClient, target_date: date) -> dict[str, Any]:
     tasks = {
         "daily_steps_today": _call_optional_client_method(client, "get_daily_steps", target_date, target_date),
+        "summary_raw": _call_optional_client_method(client, "_get_user_summary_raw", target_date),
         "core": _call_optional_client_method(client, "fetch_core_data", target_date=target_date),
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=target_date),
         "training_readiness": _call_optional_client_method(client, "get_training_readiness", target_date=target_date),
@@ -2875,10 +3003,13 @@ async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[
     tasks = {
         "profile": _call_optional_client_method(client, "get_user_profile"),
         "summary": _call_optional_client_method(client, "get_user_summary"),
+        "summary_raw": _call_optional_client_method(client, "_get_user_summary_raw", today),
         "daily_steps_today": _call_optional_client_method(client, "get_daily_steps", today, today),
         "core": _call_optional_client_method(client, "fetch_core_data", target_date=today),
+        "sleep_raw": _call_optional_client_method(client, "_get_sleep_data_raw", today),
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=today),
         "activity": _call_optional_client_method(client, "fetch_activity_data"),
+        "activities_by_date_recent": _call_optional_client_method(client, "get_activities_by_date", today - timedelta(days=14), today + timedelta(days=1)),
         "training": _call_optional_client_method(client, "fetch_training_data"),
         "training_readiness": _call_optional_client_method(client, "get_training_readiness", target_date=today),
         "training_status": _call_optional_client_method(client, "get_training_status", target_date=today),
@@ -3096,12 +3227,14 @@ async def dashboard(request: Request):
 async def shortcuts(request: Request):
     today = date.today()
     stored_tokens = _stored_tokens_for_request(request)
+    force_refresh = request.query_params.get("force_refresh") == "1"
 
     async def fetch_shortcuts(client: GarminClient) -> Any:
         full_context_data, trend_data = await _fetch_runtime_context(
             client,
             stored_tokens.email if stored_tokens else None,
             today,
+            force_refresh=force_refresh,
         )
         history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
         notifications = {"active": [], "history": []}
@@ -3244,6 +3377,21 @@ async def analytics(request: Request):
     stored_tokens = _stored_tokens_for_request(request)
     if stored_tokens is None:
         raise HTTPException(status_code=401, detail="Connect Garmin before opening analytics.")
+
+    if request.query_params.get("force_refresh") == "1":
+        async def refresh_analytics(client: GarminClient) -> Any:
+            full_context_data, _trend_data = await _fetch_runtime_context(
+                client,
+                stored_tokens.email,
+                date.today(),
+                force_refresh=True,
+            )
+            _save_metric_snapshot(stored_tokens.email, _build_daily_snapshot(full_context_data, date.today()))
+            return {
+                "as_of": date.today().isoformat(),
+                "analytics": _build_analytics_payload(stored_tokens.email, date.today()),
+            }
+        return await _with_client(refresh_analytics, request=request)
 
     return {
         "as_of": date.today().isoformat(),
