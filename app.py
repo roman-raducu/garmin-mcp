@@ -793,20 +793,29 @@ def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
     core_data = _source_payload(bundle, "core")
     body_data = _source_payload(bundle, "body")
     training_data = _source_payload(bundle, "training")
+    training_readiness_data = _source_payload(bundle, "training_readiness")
+    training_status_data = _source_payload(bundle, "training_status")
+    hrv_data = _source_payload(bundle, "hrv")
+    hydration_data = _source_payload(bundle, "hydration")
+    fitness_age_data = _source_payload(bundle, "fitness_age")
+    endurance_score_data = _source_payload(bundle, "endurance_score")
+    hill_score_data = _source_payload(bundle, "hill_score")
 
     return {
-        "steps_today": _deep_find_first(summary_data or core_data, {"totalSteps", "steps", "dailySteps"}),
+        "steps_today": _deep_find_first(summary_data, {"totalSteps"}) or _deep_find_first(core_data, {"steps", "dailySteps"}),
         "body_battery": _deep_find_first(core_data, {"bodyBattery", "bodyBatteryLevel", "bodyBatteryChargedValue"}),
-        "stress_level": _deep_find_first(core_data, {"stressLevel", "stressQualifierText", "overallStressLevel"}),
-        "resting_heart_rate": _deep_find_first(summary_data or core_data, {"restingHeartRate", "restingHR", "restingHeartRateValue"}),
+        "stress_level": _deep_find_first(core_data, {"stressLevel", "stressQualifierText", "overallStressLevel", "allDayStress", "stressDescription"}),
+        "resting_heart_rate": _deep_find_first(summary_data, {"restingHeartRate"}) or _deep_find_first(core_data, {"restingHR", "restingHeartRateValue"}),
         "sleep_score": _deep_find_first(core_data, {"sleepScore", "overallSleepScore"}),
         "sleep_minutes": _deep_find_first(core_data, {"sleepTimeMinutes", "sleepMinutes"}),
-        "training_readiness": _deep_find_first(training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
-        "training_status": _deep_find_first(training_data, {"trainingStatus", "trainingStatusLabel", "trainingStatusText"}),
-        "hrv_status": _deep_find_first(training_data, {"hrvStatus", "hrvStatusText", "status"}),
-        "hydration": _deep_find_first(body_data, {"hydration", "hydrationLiters", "hydrationML"}),
+        "training_readiness": _deep_find_first(training_readiness_data or training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
+        "training_status": _deep_find_first(training_status_data or training_data, {"trainingStatus", "trainingStatusLabel", "trainingStatusText"}),
+        "hrv_status": _deep_find_first(hrv_data or training_data, {"hrvStatus", "hrvStatusText", "status", "feedbackPhrase"}),
+        "hydration": _deep_find_first(hydration_data or body_data, {"hydration", "hydrationLiters", "hydrationML", "valueInML"}),
         "weight_kg": _deep_find_first(body_data, {"weightKg", "weight"}),
-        "fitness_age": _deep_find_first(body_data, {"fitnessAge", "fitnessAgeValue"}),
+        "fitness_age": _deep_find_first(fitness_age_data or body_data, {"fitnessAge", "fitnessAgeValue", "value"}),
+        "endurance_score": _deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"}),
+        "hill_score": _deep_find_first(hill_score_data, {"score", "hillScore", "value"}),
     }
 
 
@@ -1058,6 +1067,97 @@ def _build_chat_answer(
     }
 
 
+def _ollama_base_url() -> str:
+    return os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+
+
+def _ollama_model() -> str:
+    return os.getenv("OLLAMA_MODEL", "gemma3:1b")
+
+
+def _ollama_enabled() -> bool:
+    configured = os.getenv("OLLAMA_ENABLED", "true").strip().lower()
+    return configured not in {"0", "false", "no", "off"}
+
+
+def _build_ollama_prompt(
+    question: str,
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+) -> str:
+    brief = _build_chat_brief(full_context_data, trend_data)
+    recent_activities = _extract_recent_activities(full_context_data)
+    compact_context = {
+        "current_signals": brief["current_signals"],
+        "observations": brief["observations"],
+        "trend_windows": trend_data.get("windows", {}),
+        "trend_insights": trend_data.get("insights", []),
+        "recent_activities": [
+            {
+                "date": item["date"].isoformat(),
+                "type": item["type"],
+                "distance_km": item["distance_km"],
+                "duration_min": item["duration_min"],
+                "average_hr": item["average_hr"],
+            }
+            for item in recent_activities[:5]
+        ],
+        "available_sources": brief["source_inventory"]["available"],
+        "warnings": trend_data.get("warnings", []),
+    }
+
+    return (
+        "You are a Garmin performance assistant. Answer only from the Garmin context provided below. "
+        "Do not invent metrics that are not present. Write in concise natural language for a human. "
+        "Prefer short paragraphs over bullet spam. If some historical data is unavailable, say that clearly.\n\n"
+        f"Question: {question}\n\n"
+        f"Garmin context:\n{json.dumps(compact_context, default=str)}"
+    )
+
+
+async def _ask_ollama(
+    question: str,
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+) -> str | None:
+    if not _ollama_enabled():
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")))
+    payload = {
+        "model": _ollama_model(),
+        "stream": False,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a concise Garmin health and training assistant.",
+            },
+            {
+                "role": "user",
+                "content": _build_ollama_prompt(question, full_context_data, trend_data),
+            },
+        ],
+    }
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(f"{_ollama_base_url()}/api/chat", json=payload) as response:
+                if response.status >= 400:
+                    logger.warning("Ollama chat failed with status %s", response.status)
+                    return None
+                data = await response.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        logger.warning("Ollama unavailable: %s", exc)
+        return None
+
+    content = (
+        data.get("message", {}).get("content")
+        or data.get("response")
+        or ""
+    ).strip()
+    return content or None
+
+
 async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
     oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
     warnings: list[str] = []
@@ -1126,8 +1226,19 @@ async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=today),
         "activity": _call_optional_client_method(client, "fetch_activity_data"),
         "training": _call_optional_client_method(client, "fetch_training_data"),
+        "training_readiness": _call_optional_client_method(client, "get_training_readiness", target_date=today),
+        "training_status": _call_optional_client_method(client, "get_training_status", target_date=today),
+        "hrv": _call_optional_client_method(client, "get_hrv_data", target_date=today),
+        "hydration": _call_optional_client_method(client, "get_hydration_data", target_date=today),
+        "fitness_age": _call_optional_client_method(client, "get_fitness_age", target_date=today),
+        "endurance_score": _call_optional_client_method(client, "get_endurance_score", target_date=today),
+        "hill_score": _call_optional_client_method(client, "get_hill_score", target_date=today),
         "goals": _call_optional_client_method(client, "fetch_goals_data"),
         "gear": _call_optional_client_method(client, "fetch_gear_data"),
+        "workouts": _call_optional_client_method(client, "get_workouts", limit=10),
+        "devices": _call_optional_client_method(client, "get_devices"),
+        "device_settings": _call_optional_client_method(client, "get_device_settings"),
+        "badges": _call_optional_client_method(client, "get_earned_badges"),
         "blood_pressure": _call_optional_client_method(client, "fetch_blood_pressure_data"),
         "menstrual": _call_optional_client_method(client, "fetch_menstrual_data"),
     }
@@ -1240,19 +1351,30 @@ async def shortcuts(request: Request):
 @app.post("/api/chat")
 async def chat(request_payload: GarminChatRequest, request: Request):
     today = date.today()
+    question = request_payload.question.strip()
+
+    if not question:
+        raise HTTPException(status_code=400, detail="Question must not be empty.")
 
     async def answer_question(client: GarminClient) -> Any:
         full_context_data, trend_data = await asyncio.gather(
             _fetch_full_context_bundle(client, today),
             _fetch_trend_windows(client, today),
         )
+        heuristic_response = _build_chat_answer(
+            question,
+            full_context_data,
+            trend_data,
+        )
+        ollama_answer = await _ask_ollama(question, full_context_data, trend_data)
+        if ollama_answer:
+            heuristic_response["answer"] = ollama_answer
+            heuristic_response["mode"] = "ollama"
+        else:
+            heuristic_response["mode"] = "heuristic"
         return {
             "as_of": today.isoformat(),
-            "response": _build_chat_answer(
-                request_payload.question.strip(),
-                full_context_data,
-                trend_data,
-            ),
+            "response": heuristic_response,
         }
 
     return await _with_client(answer_question, request=request)

@@ -51,6 +51,10 @@ Minimum useful values:
 ```env
 PYTHONUNBUFFERED=1
 GARMIN_STATE_DB_PATH=/var/lib/garmin-mcp/garmin_state.db
+OLLAMA_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=gemma3:1b
+OLLAMA_TIMEOUT_SECONDS=120
 ```
 
 If you later bootstrap Garmin tokens once, add them here too:
@@ -119,3 +123,4 @@ If SSH to the VPS times out from the outside, check these first:
 - `GARMIN_STATE_DB_PATH` should stay on persistent disk, for example `/var/lib/garmin-mcp/garmin_state.db`.
 - This repo is now ready for `nginx -> uvicorn -> FastAPI` on a VPS.
 - The remaining Garmin risk is not app hosting anymore, but Garmin auth policy. Once one login succeeds, persist and reuse tokens instead of re-authing frequently.
+- For a small VPS like `2 vCPU / 4 GB RAM`, start with a small Ollama model such as `gemma3:1b`.
