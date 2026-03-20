@@ -267,6 +267,7 @@
       const chatInput = document.getElementById("chatInput");
       const sendButton = document.getElementById("sendButton");
       const logoutButton = document.getElementById("logoutButton");
+      let autoOpenedNotifications = false;
 
       function setMessage(text, tone = "neutral") {
         const tones = {
@@ -407,6 +408,11 @@
         const unreadCount = notifications.active.length;
         notificationCount.textContent = String(unreadCount);
         notificationCount.classList.toggle("hidden", unreadCount === 0);
+
+        if (unreadCount > 0 && !autoOpenedNotifications && window.innerWidth >= 1280) {
+          autoOpenedNotifications = true;
+          openNotificationPanel();
+        }
 
         if (!notifications.active.length) {
           notificationList.innerHTML = `<div class="rounded-[1.25rem] border border-line bg-black/20 px-4 py-3 text-sm text-muted">No unread overview notifications right now.</div>`;
@@ -561,11 +567,12 @@
         if (!trimmed) {
           return;
         }
+        const isRomanian = /[ăâîșşțţ]|\b(cum|azi|somn|stres|recuperare|antrenament|trend|ultimele)\b/i.test(trimmed);
 
         appendChatBubble("user", trimmed);
         chatInput.value = "";
         sendButton.disabled = true;
-        setMessage("Looking through your Garmin data...", "neutral");
+        setMessage(isRomanian ? "Analizez datele tale Garmin..." : "Looking through your Garmin data...", "neutral");
 
         try {
           const response = await fetch("/api/chat", {
@@ -578,7 +585,7 @@
           appendChatBubble("assistant", payload.answer, payload.supporting_points || [], payload.follow_ups || []);
           setWarnings(payload.warnings || []);
           renderHistoryMeta(data.history || {});
-          setMessage("Answer ready.", "success");
+          setMessage(isRomanian ? "Răspunsul este gata." : "Answer ready.", "success");
         } catch (error) {
           appendChatBubble("assistant", error.message);
           setMessage(error.message, "error");

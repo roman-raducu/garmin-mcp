@@ -2184,13 +2184,17 @@ def _build_chat_answer(
             window = windows.get(label)
             if not window:
                 continue
+            steps_average = window["steps"]["daily_average"]
+            history_steps_average = _history_average(history_context, label, "steps")
+            if (steps_average in (None, 0, 0.0)) and history_steps_average not in (None, 0, 0.0):
+                steps_average = history_steps_average
             supporting_points.append(
                 (
-                    f"{label}: {window['steps']['daily_average']} pași medii, "
+                    f"{label}: {steps_average} pași medii, "
                     f"{window['activities']['count']} activități, "
                     f"{window['activities']['total_distance_km']} km."
                     if language == "ro"
-                    else f"{label}: {window['steps']['daily_average']} avg steps, "
+                    else f"{label}: {steps_average} avg steps, "
                     f"{window['activities']['count']} activities, "
                     f"{window['activities']['total_distance_km']} km."
                 )
