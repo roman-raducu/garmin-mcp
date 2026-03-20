@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Garmin Chat | Dashboard</title>
+    <title>CharlieChat | Dashboard</title>
+    <link rel="icon" type="image/png" href="/favicon.ico" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -43,12 +44,10 @@
     <main class="mx-auto flex h-screen max-w-7xl flex-col overflow-hidden px-5 py-6 md:px-8 md:py-8">
       <header class="mb-6 flex flex-col gap-4 rounded-[1.75rem] border border-line bg-panel/90 px-5 py-4 shadow-glow backdrop-blur md:flex-row md:items-center md:justify-between">
         <div class="flex items-center gap-3">
-          <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-accent/25 bg-accent/10 text-sm font-bold text-accent">
-            GC
-          </div>
+          <img src="/logo.png" alt="CharlieChat" class="h-12 w-12 rounded-2xl border border-accent/25 bg-accent/10 object-cover p-1" />
           <div>
             <p class="text-xs uppercase tracking-[0.45em] text-muted">Dashboard</p>
-            <h1 class="mt-1 text-2xl font-bold text-ink">Garmin Chat</h1>
+            <h1 class="mt-1 text-2xl font-bold text-ink">CharlieChat</h1>
           </div>
         </div>
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -66,14 +65,22 @@
       <section class="grid min-h-0 flex-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
         <aside class="flex min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow">
           <div class="mb-5">
-            <p class="text-xs uppercase tracking-[0.45em] text-muted">Shortcuts</p>
-            <h2 class="mt-3 text-2xl font-bold">Quick reads</h2>
+            <p class="text-xs uppercase tracking-[0.45em] text-muted">Signals</p>
+            <h2 class="mt-3 text-2xl font-bold">Garmin overview</h2>
           </div>
 
           <section class="rounded-[1.5rem] border border-line bg-black/20 p-4">
             <p id="summaryHeadline" class="text-lg font-bold text-ink">Loading Garmin summary...</p>
             <p id="summarySubheadline" class="mt-2 text-sm leading-6 text-muted">This becomes your shortcut layer over Garmin data.</p>
             <div id="summaryObservations" class="mt-4 space-y-2"></div>
+          </section>
+
+          <section class="mt-4 rounded-[1.5rem] border border-line bg-black/20 p-4">
+            <div>
+              <p class="text-xs uppercase tracking-[0.35em] text-accent">Current metrics</p>
+              <p class="mt-2 text-sm leading-6 text-muted">Normalized Garmin signals available right now.</p>
+            </div>
+            <div id="metricList" class="mt-4 grid gap-2"></div>
           </section>
 
           <section class="mt-4 rounded-[1.5rem] border border-line bg-black/20 p-4">
@@ -108,7 +115,7 @@
             <div>
               <p class="text-xs uppercase tracking-[0.45em] text-muted">Chat</p>
               <h2 class="mt-2 text-2xl font-bold">Natural language Garmin</h2>
-              <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">No raw payloads here. Ask about sleep, recovery, trends, activities, or how today looks overall.</p>
+              <p class="mt-2 max-w-2xl text-sm leading-6 text-muted">Ask in Romanian or English about sleep, stress, recovery, trends, hydration, VO2 max, HRV, activities, or wider history.</p>
             </div>
             <button
               id="clearChat"
@@ -138,7 +145,7 @@
               type="submit"
               class="rounded-[1.25rem] bg-accent px-5 py-4 text-sm font-bold text-black transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Ask Garmin
+              Ask Charlie
             </button>
           </form>
         </section>
@@ -153,6 +160,7 @@
       const summaryObservations = document.getElementById("summaryObservations");
       const shortcutList = document.getElementById("shortcutList");
       const suggestionList = document.getElementById("suggestionList");
+      const metricList = document.getElementById("metricList");
       const historyMeta = document.getElementById("historyMeta");
       const syncHistoryButton = document.getElementById("syncHistoryButton");
       const chatThread = document.getElementById("chatThread");
@@ -286,6 +294,19 @@
         return button;
       }
 
+      function renderMetricRows(metrics = []) {
+        metricList.innerHTML = "";
+        metrics.forEach((item) => {
+          const row = document.createElement("div");
+          row.className = "flex items-center justify-between gap-4 rounded-[1rem] border border-line bg-black/20 px-3 py-2";
+          row.innerHTML = `
+            <div class="text-sm text-muted">${escapeHtml(item.label)}</div>
+            <div class="text-sm text-right font-semibold text-ink">${escapeHtml(item.value)}</div>
+          `;
+          metricList.appendChild(row);
+        });
+      }
+
       function renderHistoryMeta(history = {}) {
         if (!history.available) {
           historyMeta.textContent = "Health-history sync is empty. Sync 12 months to enable wider sleep, stress, and recovery trends.";
@@ -317,12 +338,14 @@
           });
 
           shortcutList.innerHTML = "";
+          renderMetricRows(shortcuts.current_metrics || []);
           shortcuts.cards.forEach((card) => shortcutList.appendChild(renderShortcutCard(card)));
           renderSuggestions(shortcuts.suggested_questions || []);
           setWarnings(shortcuts.warnings || []);
           setMessage("Shortcuts loaded.", "success");
         } catch (error) {
           shortcutList.innerHTML = `<div class="rounded-[1.5rem] border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm text-danger">${escapeHtml(error.message)}</div>`;
+          metricList.innerHTML = "";
           setWarnings([]);
           renderHistoryMeta({});
           setMessage(error.message, "error");

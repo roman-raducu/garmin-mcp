@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import aiohttp
@@ -17,7 +18,7 @@ import garth
 from aiogarmin import GarminAuth, GarminClient
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from garth.sso import resume_login as garth_resume_login
 from pydantic import BaseModel
@@ -31,6 +32,9 @@ logger = logging.getLogger(__name__)
 COOKIE_NAME = "garmin_session"
 PENDING_AUTH_TTL_SECONDS = 10 * 60
 TOKEN_DB_PATH = os.getenv("GARMIN_STATE_DB_PATH", "/tmp/garmin_state.db")
+CONTEXT_CACHE_TTL_SECONDS = int(os.getenv("GARMIN_CONTEXT_CACHE_TTL_SECONDS", "300"))
+APP_ROOT = Path(__file__).resolve().parent
+LOGO_PATH = APP_ROOT / "templates" / "logo.png"
 
 
 @dataclass
@@ -109,6 +113,17 @@ def _init_token_db() -> None:
                     snapshot_json TEXT NOT NULL,
                     updated_at REAL NOT NULL,
                     PRIMARY KEY(email, calendar_date)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS context_cache (
+                    email TEXT NOT NULL,
+                    cache_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(email, cache_key)
                 )
                 """
             )
@@ -1063,6 +1078,49 @@ def _save_metric_snapshot(email: str, snapshot: dict[str, Any]) -> None:
             connection.commit()
 
 
+def _save_context_cache(email: str, cache_key: str, payload: dict[str, Any]) -> None:
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                """
+                INSERT INTO context_cache (email, cache_key, payload_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(email, cache_key) DO UPDATE SET
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    email,
+                    cache_key,
+                    json.dumps(payload, default=str),
+                    _now(),
+                ),
+            )
+            connection.commit()
+
+
+def _load_context_cache(email: str, cache_key: str, max_age_seconds: int = CONTEXT_CACHE_TTL_SECONDS) -> dict[str, Any] | None:
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            row = connection.execute(
+                """
+                SELECT payload_json, updated_at
+                FROM context_cache
+                WHERE email = ? AND cache_key = ?
+                """,
+                (email, cache_key),
+            ).fetchone()
+
+    if row is None:
+        return None
+
+    updated_at = float(row[1])
+    if _now() - updated_at > max_age_seconds:
+        return None
+
+    return json.loads(row[0])
+
+
 def _load_metric_snapshots(email: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
     with TOKEN_DB_LOCK:
         with sqlite3.connect(TOKEN_DB_PATH) as connection:
@@ -1194,6 +1252,40 @@ def _build_history_context(email: str | None, today: date) -> dict[str, Any]:
         "windows": windows,
         "insights": _build_health_history_insights(windows) if windows else [],
     }
+
+
+def _current_metric_rows(bundle: dict[str, Any]) -> list[dict[str, str]]:
+    snapshot = _build_daily_snapshot(bundle, date.today())
+    rows: list[tuple[str, str | None]] = [
+        ("Steps", f"{snapshot['steps']} / {snapshot['step_goal']}" if snapshot["step_goal"] else str(snapshot["steps"] or 0)),
+        ("Distance", _format_km(snapshot["distance_m"] / 1000) if snapshot["distance_m"] else None),
+        ("Active kcal", str(int(snapshot["active_kcal"])) if snapshot["active_kcal"] else None),
+        ("Resting HR", str(snapshot["resting_hr"]) if snapshot["resting_hr"] else None),
+        ("Sleep score", str(snapshot["sleep_score"]) if snapshot["sleep_score"] else None),
+        ("Sleep", _format_minutes(snapshot["sleep_minutes"])),
+        ("Body Battery", str(snapshot["body_battery_current"]) if snapshot["body_battery_current"] else None),
+        ("Body Battery wake", str(snapshot["body_battery_at_wake"]) if snapshot["body_battery_at_wake"] else None),
+        ("Stress avg", str(snapshot["stress_avg"]) if snapshot["stress_avg"] else None),
+        ("Stress max", str(snapshot["stress_max"]) if snapshot["stress_max"] else None),
+        ("Stress state", snapshot["stress_qualifier"]),
+        ("Training readiness", str(snapshot["training_readiness"]) if snapshot["training_readiness"] not in (None, "") else None),
+        ("Training status", snapshot["training_status"]),
+        ("Acute/chronic load", f"{snapshot['acute_load_ratio']}" if snapshot["acute_load_ratio"] else None),
+        ("VO2 max", f"{snapshot['vo2max']}" if snapshot["vo2max"] else None),
+        ("HRV status", snapshot["hrv_status"]),
+        ("HRV last night", str(snapshot["hrv_last_night_avg"]) if snapshot["hrv_last_night_avg"] else None),
+        ("Hydration", _format_ml(snapshot["hydration_ml"])),
+        ("Hydration goal", _format_ml(snapshot["hydration_goal_ml"])),
+        ("Weight", f"{snapshot['weight_kg']:.1f} kg" if snapshot["weight_kg"] else None),
+        ("Body fat", f"{snapshot['body_fat_pct']:.1f}%" if snapshot["body_fat_pct"] else None),
+        ("Fitness age", f"{snapshot['fitness_age']:.1f}" if snapshot["fitness_age"] else None),
+        ("Endurance score", f"{snapshot['endurance_score']:.1f}" if snapshot["endurance_score"] else None),
+        ("Hill score", f"{snapshot['hill_score']:.1f}" if snapshot["hill_score"] else None),
+        ("SpO2 latest", str(snapshot["spo2_latest"]) if snapshot["spo2_latest"] else None),
+        ("SpO2 average", f"{snapshot['spo2_average']:.1f}" if snapshot["spo2_average"] else None),
+        ("Intensity minutes", str(snapshot["intensity_minutes"]) if snapshot["intensity_minutes"] else None),
+    ]
+    return [{"label": label, "value": value} for label, value in rows if value not in (None, "", "0")]
 
 
 def _build_chat_brief(
@@ -1351,6 +1443,8 @@ def _summarize_shortcuts(
             "observations": (brief["observations"] + history_insights)[:5],
         },
         "cards": cards,
+        "current_metrics": _current_metric_rows(full_context_data),
+        "source_inventory": brief["source_inventory"],
         "suggested_questions": brief["suggested_questions"],
         "warnings": trend_data.get("warnings", []) + (
             []
@@ -1512,13 +1606,60 @@ def _build_ollama_prompt(
     brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
     recent_activities = _extract_recent_activities(full_context_data)
     current_snapshot = _build_daily_snapshot(full_context_data, date.today())
+    compact_trend_windows = {
+        label: {
+            "steps_avg": window["steps"]["daily_average"],
+            "activities": window["activities"]["count"],
+            "distance_km": window["activities"]["total_distance_km"],
+        }
+        for label, window in trend_data.get("windows", {}).items()
+    }
+    compact_health_windows = {
+        label: {
+            "sleep_score_avg": window["sleep_score"]["average"],
+            "sleep_minutes_avg": window["sleep_minutes"]["average"],
+            "body_battery_avg": window["body_battery"]["average"],
+            "stress_avg": window["stress"]["average"],
+            "resting_hr_avg": window["resting_hr"]["average"],
+        }
+        for label, window in history_context.get("windows", {}).items()
+    }
     compact_context = {
-        "current_snapshot": current_snapshot,
         "current_signals": brief["current_signals"],
         "observations": brief["observations"],
-        "trend_windows": trend_data.get("windows", {}),
+        "current_snapshot": {
+            key: value
+            for key, value in current_snapshot.items()
+            if key in {
+                "calendar_date",
+                "steps",
+                "step_goal",
+                "distance_m",
+                "active_kcal",
+                "resting_hr",
+                "sleep_score",
+                "sleep_minutes",
+                "body_battery_current",
+                "body_battery_at_wake",
+                "stress_avg",
+                "stress_qualifier",
+                "training_readiness",
+                "training_status",
+                "vo2max",
+                "hrv_status",
+                "hrv_last_night_avg",
+                "hydration_ml",
+                "hydration_goal_ml",
+                "weight_kg",
+                "body_fat_pct",
+                "fitness_age",
+                "endurance_score",
+                "hill_score",
+            }
+        },
+        "trend_windows": compact_trend_windows,
         "trend_insights": trend_data.get("insights", []),
-        "health_history_windows": history_context.get("windows", {}),
+        "health_history_windows": compact_health_windows,
         "health_history_insights": history_context.get("insights", []),
         "history_days_available": history_context.get("days_available", 0),
         "recent_activities": [
@@ -1529,7 +1670,7 @@ def _build_ollama_prompt(
                 "duration_min": item["duration_min"],
                 "average_hr": item["average_hr"],
             }
-            for item in recent_activities[:5]
+            for item in recent_activities[:3]
         ],
         "available_sources": brief["source_inventory"]["available"],
         "warnings": trend_data.get("warnings", []),
@@ -1538,7 +1679,8 @@ def _build_ollama_prompt(
     return (
         "You are a Garmin performance assistant. Answer only from the Garmin context provided below. "
         "Do not invent metrics that are not present. Write in concise natural language for a human. "
-        "Prefer short paragraphs over bullet spam. If some historical data is unavailable, say that clearly.\n\n"
+        "Respond in the same language as the user's question. Prefer short paragraphs over bullet spam. "
+        "If some historical data is unavailable, say that clearly.\n\n"
         f"Question: {question}\n\n"
         f"Garmin context:\n{json.dumps(compact_context, default=str)}"
     )
@@ -1553,7 +1695,8 @@ async def _ask_ollama(
     if not _ollama_enabled():
         return None
 
-    timeout = aiohttp.ClientTimeout(total=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")))
+    configured_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "35"))
+    timeout = aiohttp.ClientTimeout(total=min(configured_timeout, 35.0))
     payload = {
         "model": _ollama_model(),
         "stream": False,
@@ -1640,6 +1783,30 @@ async def _fetch_metric_snapshot_bundle(client: GarminClient, target_date: date)
     return {name: result for name, result in zip(names, results)}
 
 
+async def _fetch_runtime_context(
+    client: GarminClient,
+    email: str | None,
+    today: date,
+    force_refresh: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if email and not force_refresh:
+        cached_full = _load_context_cache(email, f"full_context:{today.isoformat()}")
+        cached_trends = _load_context_cache(email, f"trend_context:{today.isoformat()}")
+        if cached_full is not None and cached_trends is not None:
+            return cached_full, cached_trends
+
+    full_context_data, trend_data = await asyncio.gather(
+        _fetch_full_context_bundle(client, today),
+        _fetch_trend_windows(client, today),
+    )
+
+    if email:
+        _save_context_cache(email, f"full_context:{today.isoformat()}", full_context_data)
+        _save_context_cache(email, f"trend_context:{today.isoformat()}", trend_data)
+
+    return full_context_data, trend_data
+
+
 async def _call_optional_client_method(
     client: GarminClient,
     method_name: str,
@@ -1677,7 +1844,6 @@ async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[
         "gear": _call_optional_client_method(client, "fetch_gear_data"),
         "workouts": _call_optional_client_method(client, "get_workouts", limit=10),
         "devices": _call_optional_client_method(client, "get_devices"),
-        "device_settings": _call_optional_client_method(client, "get_device_settings"),
         "badges": _call_optional_client_method(client, "get_earned_badges"),
         "blood_pressure": _call_optional_client_method(client, "fetch_blood_pressure_data"),
         "menstrual": _call_optional_client_method(client, "fetch_menstrual_data"),
@@ -1734,6 +1900,16 @@ def healthz():
     return {"status": "ok"}
 
 
+@app.get("/logo.png")
+def logo_png():
+    return FileResponse(LOGO_PATH)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(LOGO_PATH)
+
+
 @app.head("/healthz")
 def healthz_head():
     return Response(status_code=200)
@@ -1777,9 +1953,10 @@ async def shortcuts(request: Request):
     stored_tokens = _stored_tokens_for_request(request)
 
     async def fetch_shortcuts(client: GarminClient) -> Any:
-        full_context_data, trend_data = await asyncio.gather(
-            _fetch_full_context_bundle(client, today),
-            _fetch_trend_windows(client, today),
+        full_context_data, trend_data = await _fetch_runtime_context(
+            client,
+            stored_tokens.email if stored_tokens else None,
+            today,
         )
         history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
         if stored_tokens is not None:
@@ -1804,9 +1981,10 @@ async def chat(request_payload: GarminChatRequest, request: Request):
         raise HTTPException(status_code=400, detail="Question must not be empty.")
 
     async def answer_question(client: GarminClient) -> Any:
-        full_context_data, trend_data = await asyncio.gather(
-            _fetch_full_context_bundle(client, today),
-            _fetch_trend_windows(client, today),
+        full_context_data, trend_data = await _fetch_runtime_context(
+            client,
+            stored_tokens.email if stored_tokens else None,
+            today,
         )
         history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
         if stored_tokens is not None:
