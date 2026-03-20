@@ -2042,59 +2042,59 @@ def _build_chat_answer(
             if metric_focus["id"] == "vo2max":
                 if delta >= 0.5:
                     answer = (
-                        f"VO2 max arată constructiv: media pe 7 zile este {avg_7d:.1f}, peste media pe 30 de zile de {avg_30d:.1f}."
+                        f"VO2 max arată constructiv în contextul tău recent. Media pe 7 zile este {avg_7d:.1f}, peste media pe 30 de zile de {avg_30d:.1f}, deci baza aerobică se mișcă în direcția bună."
                         if language == "ro"
-                        else f"Your VO2 max trend looks constructive: the 7-day average is {avg_7d:.1f}, above the 30-day average of {avg_30d:.1f}."
+                        else f"Your VO2 max looks constructive in recent context. The 7-day average is {avg_7d:.1f}, above the 30-day average of {avg_30d:.1f}, so the aerobic base is moving in the right direction."
                     )
                 elif delta <= -0.5:
                     answer = (
-                        f"VO2 max pare ușor în recul: media pe 7 zile este {avg_7d:.1f}, sub media pe 30 de zile de {avg_30d:.1f}."
+                        f"VO2 max pare ușor în recul față de baseline-ul recent. Media pe 7 zile este {avg_7d:.1f}, sub media pe 30 de zile de {avg_30d:.1f}, deci progresul aerobic nu arată la fel de curat acum."
                         if language == "ro"
-                        else f"Your VO2 max looks slightly softer: the 7-day average is {avg_7d:.1f}, below the 30-day average of {avg_30d:.1f}."
+                        else f"Your VO2 max looks a bit softer than your recent baseline. The 7-day average is {avg_7d:.1f}, below the 30-day average of {avg_30d:.1f}, so aerobic progress does not look as clean right now."
                     )
                 else:
                     answer = (
-                        f"VO2 max este destul de stabil: media pe 7 zile este {avg_7d:.1f}, foarte aproape de media pe 30 de zile de {avg_30d:.1f}."
+                        f"VO2 max este destul de stabil. Media pe 7 zile este {avg_7d:.1f}, foarte aproape de media pe 30 de zile de {avg_30d:.1f}, deci nu văd nici o accelerare clară, nici un regres clar."
                         if language == "ro"
-                        else f"Your VO2 max looks fairly stable: the 7-day average is {avg_7d:.1f}, very close to the 30-day average of {avg_30d:.1f}."
+                        else f"Your VO2 max looks fairly stable. The 7-day average is {avg_7d:.1f}, very close to the 30-day average of {avg_30d:.1f}, so I’m not seeing a clear acceleration or a clear drop."
                     )
             elif metric_focus["id"] == "stress_avg":
                 if delta >= 5:
                     answer = (
-                        f"Stresul a crescut în ultima săptămână: media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile."
+                        f"Stresul este mai ridicat decât de obicei în ultima săptămână. Media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile, ceea ce sugerează mai multă presiune fiziologică decât de obicei."
                         if language == "ro"
-                        else f"Stress has been elevated over the last week: the 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days."
+                        else f"Stress has been running higher than usual over the last week. The 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days, which suggests more physiological pressure than usual."
                     )
                 elif delta <= -5:
                     answer = (
-                        f"Stresul arată mai bine decât baseline-ul recent: media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile."
+                        f"Stresul arată mai bine decât baseline-ul recent. Media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile, deci sistemul tău pare mai calm decât de obicei."
                         if language == "ro"
-                        else f"Stress looks better than your recent baseline: the 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days."
+                        else f"Stress looks better than your recent baseline. The 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days, so your system looks calmer than usual."
                     )
             elif metric_focus["id"] == "steps":
                 if delta >= 1000:
                     answer = (
-                        f"Te-ai mișcat mai mult în ultima săptămână: media pe 7 zile este {avg_7d:.0f} pași, peste baseline-ul de 30 de zile de {avg_30d:.0f}."
+                        f"Te-ai mișcat mai mult decât de obicei în ultima săptămână. Media pe 7 zile este {avg_7d:.0f} pași, peste baseline-ul de 30 de zile de {avg_30d:.0f}, deci nivelul de mișcare este clar în urcare."
                         if language == "ro"
-                        else f"You’ve been moving more over the last week: the 7-day average is {avg_7d:.0f} steps, above the 30-day baseline of {avg_30d:.0f}."
+                        else f"You’ve been moving more than usual over the last week. The 7-day average is {avg_7d:.0f} steps, above the 30-day baseline of {avg_30d:.0f}, so overall movement is clearly up."
                     )
                 elif delta <= -1000:
                     answer = (
-                        f"Volumul de pași a scăzut în ultima săptămână: media pe 7 zile este {avg_7d:.0f}, sub baseline-ul de 30 de zile de {avg_30d:.0f}."
+                        f"Volumul de pași a scăzut în ultima săptămână. Media pe 7 zile este {avg_7d:.0f}, sub baseline-ul de 30 de zile de {avg_30d:.0f}, deci mișcarea de zi cu zi e mai jos decât ritmul tău obișnuit."
                         if language == "ro"
-                        else f"Your step volume has dipped over the last week: the 7-day average is {avg_7d:.0f}, below the 30-day baseline of {avg_30d:.0f}."
+                        else f"Your step volume has dipped over the last week. The 7-day average is {avg_7d:.0f}, below the 30-day baseline of {avg_30d:.0f}, so daily movement is lower than your usual rhythm."
                     )
             elif metric_focus["id"] == "hydration_ml":
                 answer = (
-                    f"Hidratarea medie pe 7 zile este {avg_7d:.0f} ml, față de {avg_30d:.0f} ml pe 30 de zile."
+                    f"Hidratarea ta recentă este la {avg_7d:.0f} ml pe 7 zile, față de {avg_30d:.0f} ml pe 30 de zile. Asta arată dacă aportul de apă este mai bun sau mai slab decât nivelul tău normal."
                     if language == "ro"
-                    else f"Your 7-day average hydration is {avg_7d:.0f} ml versus {avg_30d:.0f} ml over 30 days."
+                    else f"Your recent hydration is running at {avg_7d:.0f} ml over 7 days versus {avg_30d:.0f} ml over 30 days. That shows whether water intake is stronger or softer than your normal level."
                 )
             elif metric_focus["id"] == "hrv_last_night_avg":
                 answer = (
-                    f"HRV-ul recent este {avg_7d:.1f} pe 7 zile, față de {avg_30d:.1f} pe 30 de zile."
+                    f"HRV-ul recent este {avg_7d:.1f} pe 7 zile, față de {avg_30d:.1f} pe 30 de zile. Asta e util pentru a vedea dacă recuperarea autonomă ține pasul cu încărcarea."
                     if language == "ro"
-                    else f"Your recent HRV is {avg_7d:.1f} over 7 days versus {avg_30d:.1f} over 30 days."
+                    else f"Your recent HRV is {avg_7d:.1f} over 7 days versus {avg_30d:.1f} over 30 days. That helps show whether autonomic recovery is keeping up with your load."
                 )
 
         if current_value:
@@ -2115,10 +2115,10 @@ def _build_chat_answer(
             )
 
         if metric_focus["id"] == "vo2max" and _question_matches(question, "improve", "improve it", "îmbunătățesc", "imbunatatesc", "cresc", "cres"):
-            supporting_points.append(
-                "Ca să-l îmbunătățești, urmărește volum aerobic consecvent, una-două sesiuni mai intense pe săptămână și zile de recuperare suficient de bune încât să poți susține progresul."
+            answer += (
+                " Ca să-l împingi în sus, ai nevoie în primul rând de consistență: volum aerobic regulat, una-două sesiuni mai intense pe săptămână și recuperare suficient de bună încât să poți absorbi munca."
                 if language == "ro"
-                else "To improve it, the usual levers are consistent aerobic volume, one or two harder sessions each week, and recovery that is good enough to absorb them."
+                else " To push it upward, the main levers are consistency: regular aerobic volume, one or two harder sessions each week, and recovery that is good enough to absorb the work."
             )
         follow_ups = (
             [
@@ -2134,7 +2134,7 @@ def _build_chat_answer(
     elif _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit"):
         sleep_duration = _format_minutes(current.get("sleep_minutes"))
         answer = (
-            "Recuperarea de peste noapte pare decentă, dar o judec în contextul somnului, stresului și energiei disponibile azi."
+            "Recuperarea de peste noapte pare decentă, dar o citesc în contextul somnului, stresului și energiei disponibile azi, nu doar după un singur număr."
             if language == "ro"
             else "Your overnight recovery looks reasonably solid, but I’d read it in the context of sleep, stress, and available energy today."
         )
@@ -2146,10 +2146,6 @@ def _build_chat_answer(
             )
         if sleep_duration:
             supporting_points.append(f"{'Durata somnului' if language == 'ro' else 'Sleep duration'}: {sleep_duration}.")
-        if current.get("body_battery") not in (None, ""):
-            supporting_points.append(f"{'Body Battery azi' if language == 'ro' else 'Body Battery today'}: {current['body_battery']}.")
-        if current.get("stress_level") not in (None, ""):
-            supporting_points.append(f"{'Semnal stres' if language == 'ro' else 'Stress signal'}: {current['stress_level']}.")
         recent_sleep = health_windows.get("7d", {}).get("sleep_score", {}).get("average")
         baseline_sleep = health_windows.get("30d", {}).get("sleep_score", {}).get("average")
         if recent_sleep is not None and baseline_sleep is not None:
@@ -2157,6 +2153,12 @@ def _build_chat_answer(
                 f" Pe termen scurt, somnul tău rulează la {recent_sleep} față de un baseline pe 30 de zile de {baseline_sleep}."
                 if language == "ro"
                 else f" In short-term context, your 7-day sleep average is {recent_sleep} against a 30-day baseline of {baseline_sleep}."
+            )
+        if current.get("body_battery") not in (None, "") and current.get("stress_level") not in (None, ""):
+            answer += (
+                f" În jurul acestui semnal, Body Battery este {current['body_battery']}, iar stresul este {current['stress_level']}, ceea ce ajută la interpretarea cât de bine s-a transformat somnul în recuperare reală."
+                if language == "ro"
+                else f" Around that, Body Battery is {current['body_battery']} and stress is {current['stress_level']}, which helps show how well sleep translated into actual recovery."
             )
         follow_ups = (
             [
@@ -2181,15 +2183,10 @@ def _build_chat_answer(
                 if language == "ro"
                 else f"Training readiness is {current['training_readiness']}, which is the clearest single signal of how ready you are for load today."
             )
-        for value in [
-            f"{'Body Battery' if language == 'ro' else 'Body Battery'}: {current['body_battery']}." if current.get("body_battery") not in (None, "") else None,
-            f"{'Status HRV' if language == 'ro' else 'HRV status'}: {current['hrv_status']}." if current.get("hrv_status") not in (None, "") else None,
-            f"{'Scor somn' if language == 'ro' else 'Sleep score'}: {current['sleep_score']}." if current.get("sleep_score") not in (None, "") else None,
-            f"{'Nivel stres' if language == 'ro' else 'Stress level'}: {current['stress_level']}." if current.get("stress_level") not in (None, "") else None,
-            f"{'Status antrenament' if language == 'ro' else 'Training status'}: {current['training_status']}." if current.get("training_status") not in (None, "") else None,
-        ]:
-            if value:
-                supporting_points.append(value)
+        if current.get("hrv_status") not in (None, ""):
+            supporting_points.append(f"{'Status HRV' if language == 'ro' else 'HRV status'}: {current['hrv_status']}.")
+        if current.get("training_status") not in (None, ""):
+            supporting_points.append(f"{'Status antrenament' if language == 'ro' else 'Training status'}: {current['training_status']}.")
         recent_battery = health_windows.get("7d", {}).get("body_battery", {}).get("average")
         baseline_battery = health_windows.get("30d", {}).get("body_battery", {}).get("average")
         if recent_battery is not None and baseline_battery is not None:
@@ -2197,6 +2194,12 @@ def _build_chat_answer(
                 f" În același timp, media Body Battery pe 7 zile este {recent_battery} față de un baseline pe 30 de zile de {baseline_battery}, ceea ce îți spune dacă azi vine dintr-o perioadă mai bună sau mai grea."
                 if language == "ro"
                 else f" Your 7-day Body Battery average is {recent_battery} against a 30-day baseline of {baseline_battery}, which helps show whether today sits on top of stronger or softer recent recovery."
+            )
+        if current.get("sleep_score") not in (None, "") and current.get("stress_level") not in (None, ""):
+            answer += (
+                f" Somnul este la {current['sleep_score']}, iar stresul la {current['stress_level']}, deci verdictul de recuperare trebuie citit ca un echilibru între cât ai reîncărcat și câtă presiune există încă în sistem."
+                if language == "ro"
+                else f" Sleep is at {current['sleep_score']} and stress is {current['stress_level']}, so recovery should be read as a balance between how much you recharged and how much pressure is still in the system."
             )
         follow_ups = (
             [
@@ -2213,7 +2216,7 @@ def _build_chat_answer(
         last_activity = recent_activities[0] if recent_activities else None
         if last_activity:
             answer = (
-                f"Cea mai recentă activitate vizibilă este {last_activity['type']} din {last_activity['date'].isoformat()}, iar asta îți oferă cel mai bun reper pentru încărcarea ta imediat anterioară."
+                f"Cea mai recentă activitate vizibilă este {last_activity['type']} din {last_activity['date'].isoformat()}, iar asta e punctul corect de pornire pentru a înțelege încărcarea ta imediat anterioară."
                 if language == "ro"
                 else f"The clearest recent anchor I can see is a {last_activity['type']} from {last_activity['date'].isoformat()}, which is the best reference point for your most recent load."
             )
@@ -2231,8 +2234,10 @@ def _build_chat_answer(
                 else "I can’t see a detailed recent activity record to summarize well right now."
             )
         if "30d" in windows:
-            supporting_points.append(
-                f"{'Număr activități pe 30 zile' if language == 'ro' else '30-day activity count'}: {windows['30d']['activities']['count']}."
+            answer += (
+                f" În context mai larg, ai {windows['30d']['activities']['count']} activități în ultimele 30 de zile, deci ultimul efort poate fi citit în raport cu un volum recent real, nu cu o singură zi izolată."
+                if language == "ro"
+                else f" In broader context, you have {windows['30d']['activities']['count']} activities over the last 30 days, so the latest effort can be read against a real recent workload rather than an isolated day."
             )
         follow_ups = (
             [
@@ -2246,9 +2251,35 @@ def _build_chat_answer(
             ]
         )
     elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume", "trend", "bază", "baseline", "luni"):
-        insight = trend_data.get("insights", ["Trend data is limited right now."])[0]
-        answer = history_context.get("insights", [insight])[0] if history_context.get("insights") else insight
-        answer = _translate_history_insight(answer, language)
+        distance_30 = windows.get("30d", {}).get("activities", {}).get("total_distance_km")
+        distance_90 = windows.get("90d", {}).get("activities", {}).get("total_distance_km")
+        sleep_7 = health_windows.get("7d", {}).get("sleep_score", {}).get("average")
+        sleep_30 = health_windows.get("30d", {}).get("sleep_score", {}).get("average")
+        stress_7 = health_windows.get("7d", {}).get("stress", {}).get("average")
+        stress_30 = health_windows.get("30d", {}).get("stress", {}).get("average")
+        answer = (
+            "Trendul general nu se reduce la un singur semnal, așa că îl citesc separat pe încărcare și pe recuperare."
+            if language == "ro"
+            else "The overall trend is not one single signal, so I’m reading load and recovery separately."
+        )
+        if distance_30 is not None and distance_90 is not None:
+            answer += (
+                f" Pe partea de încărcare, ai {distance_30:.1f} km în ultimele 30 de zile și {distance_90:.1f} km în ultimele 90, ceea ce arată ritmul recent al muncii."
+                if language == "ro"
+                else f" On the load side, you have {distance_30:.1f} km over the last 30 days and {distance_90:.1f} km over the last 90, which shows the recent pace of work."
+            )
+        if sleep_7 is not None and sleep_30 is not None:
+            answer += (
+                f" Pe partea de recuperare, scorul mediu de somn este {sleep_7:.1f} pe 7 zile față de {sleep_30:.1f} pe 30 de zile."
+                if language == "ro"
+                else f" On the recovery side, average sleep score is {sleep_7:.1f} over 7 days versus {sleep_30:.1f} over 30 days."
+            )
+        if stress_7 is not None and stress_30 is not None:
+            answer += (
+                f" Stresul este la {stress_7:.1f} pe 7 zile față de {stress_30:.1f} pe 30 de zile, ceea ce arată dacă progresul vine cu un cost fiziologic mai mare sau mai mic."
+                if language == "ro"
+                else f" Stress is {stress_7:.1f} over 7 days versus {stress_30:.1f} over 30 days, which shows whether progress is coming with a higher or lower physiological cost."
+            )
         for label in ("7d", "30d", "90d", "12m"):
             window = windows.get(label)
             if not window:
@@ -2408,7 +2439,9 @@ def _build_chat_answer(
         )
         localized_history = [_translate_history_insight(item, language) for item in history_context.get("insights", [])]
         localized_observations = [_translate_observation(item, language) for item in brief["observations"]]
-        supporting_points.extend((localized_history + localized_observations)[:3])
+        if localized_history:
+            answer += f" {localized_history[0]}"
+        supporting_points.extend(localized_observations[:2])
         if recent_activities:
             supporting_points.append(
                 (
@@ -2421,7 +2454,7 @@ def _build_chat_answer(
     return {
         "question": question,
         "answer": answer,
-        "supporting_points": supporting_points[:4],
+        "supporting_points": supporting_points[:2],
         "follow_ups": follow_ups,
         "warnings": warnings,
         "used_sources": brief["source_inventory"]["available"],
