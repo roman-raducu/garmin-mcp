@@ -2077,6 +2077,51 @@ def favicon():
     return FileResponse(LOGO_PATH)
 
 
+@app.get("/apple-touch-icon.png")
+def apple_touch_icon():
+    return FileResponse(LOGO_PATH)
+
+
+@app.get("/icon-192.png")
+def icon_192():
+    return FileResponse(LOGO_PATH)
+
+
+@app.get("/icon-512.png")
+def icon_512():
+    return FileResponse(LOGO_PATH)
+
+
+@app.get("/site.webmanifest")
+def site_webmanifest():
+    return JSONResponse(
+        {
+            "name": "CharlieChat",
+            "short_name": "CharlieChat",
+            "description": "Garmin data, explained in plain language.",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#05070b",
+            "theme_color": "#63a8ff",
+            "icons": [
+                {
+                    "src": "/icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+                {
+                    "src": "/icon-512.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+            ],
+        }
+    )
+
+
 @app.head("/healthz")
 def healthz_head():
     return Response(status_code=200)
