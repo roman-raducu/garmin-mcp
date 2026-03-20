@@ -11,13 +11,13 @@ If you want sessions to survive restarts or deploys, point `GARMIN_STATE_DB_PATH
 
 ## VPS deploy
 
-Recommended target: Ubuntu 22.04 or 24.04 with `nginx`, `systemd`, Python 3.11, and a persistent disk path for Garmin state.
+Recommended target: Debian 13 or Ubuntu 24.04 with `nginx`, `systemd`, Python 3, and a persistent disk path for Garmin state.
 
 ### 1. Install packages
 
 ```bash
 sudo apt update
-sudo apt install -y git python3.11 python3.11-venv python3-pip nginx certbot python3-certbot-nginx
+sudo apt install -y git python3 python3-venv python3-pip nginx certbot python3-certbot-nginx
 ```
 
 ### 2. Create app user and directories
@@ -34,7 +34,7 @@ sudo chmod 775 /var/lib/garmin-mcp
 ```bash
 sudo -u garmin git clone https://github.com/roman-raducu/garmin-mcp.git /opt/garmin-mcp
 cd /opt/garmin-mcp
-sudo -u garmin python3.11 -m venv .venv
+sudo -u garmin python3 -m venv .venv
 sudo -u garmin .venv/bin/pip install --upgrade pip
 sudo -u garmin .venv/bin/pip install -r requirements.txt
 ```
