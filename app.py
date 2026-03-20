@@ -127,6 +127,23 @@ def _init_token_db() -> None:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS daily_notifications (
+                    email TEXT NOT NULL,
+                    notification_date TEXT NOT NULL,
+                    notification_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    metric_key TEXT,
+                    severity TEXT NOT NULL,
+                    dismissed_at REAL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(email, notification_id)
+                )
+                """
+            )
             connection.commit()
 
 
@@ -823,6 +840,36 @@ def _deep_find_first(data: Any, keys: set[str]) -> Any:
     return None
 
 
+def _deep_find_numeric_key_fragment(
+    data: Any,
+    include_fragments: tuple[str, ...],
+    exclude_fragments: tuple[str, ...] = ("threshold", "warning", "low", "min"),
+) -> Any:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            normalized_key = key.lower()
+            if (
+                any(fragment in normalized_key for fragment in include_fragments)
+                and not any(fragment in normalized_key for fragment in exclude_fragments)
+            ):
+                try:
+                    numeric_value = float(value)
+                except (TypeError, ValueError):
+                    numeric_value = None
+                if numeric_value is not None and 0 <= numeric_value <= 100:
+                    return value
+        for value in data.values():
+            found = _deep_find_numeric_key_fragment(value, include_fragments, exclude_fragments)
+            if found not in (None, "", [], {}):
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _deep_find_numeric_key_fragment(item, include_fragments, exclude_fragments)
+            if found not in (None, "", [], {}):
+                return found
+    return None
+
+
 def _source_payload(bundle: dict[str, Any], source_name: str) -> Any:
     source = bundle.get(source_name, {})
     if isinstance(source, dict) and source.get("available"):
@@ -1262,6 +1309,231 @@ def _build_history_context(email: str | None, today: date) -> dict[str, Any]:
     }
 
 
+def _warning_message(code: str, language: str = "en") -> str:
+    mapping = {
+        "activity_history_unavailable": {
+            "en": "Recent activity history from Garmin is incomplete right now, so training trends may be understated.",
+            "ro": "Istoricul recent al activităților din Garmin este incomplet acum, deci trendurile de antrenament pot fi subestimate.",
+        },
+        "step_history_unavailable": {
+            "en": "Step history from Garmin is partially unavailable right now, so movement trends may be less reliable.",
+            "ro": "Istoricul pașilor din Garmin este parțial indisponibil acum, deci trendurile de mișcare pot fi mai puțin fiabile.",
+        },
+    }
+    prefix = code.split(":", 1)[0]
+    return mapping.get(prefix, {}).get(language) or mapping.get(prefix, {}).get("en") or code
+
+
+def _present_warnings(warnings: list[str], language: str = "en") -> list[str]:
+    seen: set[str] = set()
+    presented: list[str] = []
+    for code in warnings:
+        message = _warning_message(code, language)
+        if message not in seen:
+            seen.add(message)
+            presented.append(message)
+    return presented
+
+
+def _notification_id(notification_date: date, metric_key: str) -> str:
+    return f"{notification_date.isoformat()}:{metric_key}"
+
+
+def _build_daily_notifications(
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+    history_context: dict[str, Any],
+    notification_date: date,
+) -> list[dict[str, Any]]:
+    snapshot = _build_daily_snapshot(full_context_data, notification_date)
+    baseline = history_context.get("windows", {}).get("30d", {})
+    notifications: list[dict[str, Any]] = []
+
+    def add(metric_key: str, title: str, body: str, severity: str = "info") -> None:
+        notifications.append(
+            {
+                "notification_id": _notification_id(notification_date, metric_key),
+                "notification_date": notification_date.isoformat(),
+                "metric_key": metric_key,
+                "title": title,
+                "body": body,
+                "severity": severity,
+            }
+        )
+
+    sleep_score = snapshot.get("sleep_score")
+    sleep_baseline = baseline.get("sleep_score", {}).get("average")
+    if sleep_score and sleep_baseline not in (None, 0):
+        delta = sleep_score - sleep_baseline
+        if delta >= 5:
+            add(
+                "sleep_trend",
+                "Sleep is supporting recovery today",
+                f"Your sleep score is {sleep_score}, about {delta:.0f} points above your 30-day baseline. Overnight recovery looked better than usual, so today starts from a stronger place.",
+                "positive",
+            )
+        elif delta <= -5:
+            add(
+                "sleep_trend",
+                "Sleep came in below your recent norm",
+                f"Your sleep score is {sleep_score}, about {abs(delta):.0f} points below your 30-day baseline. Recovery may be softer than usual, so a lighter day could make more sense.",
+                "caution",
+            )
+
+    body_battery = snapshot.get("body_battery_current") or snapshot.get("body_battery_at_wake")
+    battery_baseline = baseline.get("body_battery", {}).get("average")
+    if body_battery and battery_baseline not in (None, 0):
+        delta = body_battery - battery_baseline
+        if delta >= 5:
+            add(
+                "body_battery",
+                "Body Battery is stronger than usual",
+                f"Body Battery is at {body_battery}, roughly {delta:.0f} points above your 30-day norm. Energy reserves look better than they usually do at this point in the day.",
+                "positive",
+            )
+        elif delta <= -5:
+            add(
+                "body_battery",
+                "Energy reserves are lower than your baseline",
+                f"Body Battery is at {body_battery}, about {abs(delta):.0f} points below your 30-day norm. That often lines up with accumulated fatigue or incomplete recovery.",
+                "caution",
+            )
+
+    stress_avg = snapshot.get("stress_avg")
+    stress_baseline = baseline.get("stress", {}).get("average")
+    if stress_avg and stress_baseline not in (None, 0):
+        delta = stress_avg - stress_baseline
+        if delta >= 5:
+            add(
+                "stress",
+                "Stress is running higher than usual",
+                f"Average stress is {stress_avg}, around {delta:.0f} points above your 30-day baseline. That increases the chance that recovery and overall load are both being taxed today.",
+                "caution",
+            )
+        elif delta <= -5:
+            add(
+                "stress",
+                "Stress is calmer than your recent norm",
+                f"Average stress is {stress_avg}, about {abs(delta):.0f} points below baseline. Your system looks calmer than usual, which is generally favorable for recovery.",
+                "positive",
+            )
+
+    rhr = snapshot.get("resting_hr")
+    rhr_baseline = baseline.get("resting_hr", {}).get("average")
+    if rhr and rhr_baseline not in (None, 0):
+        delta = rhr - rhr_baseline
+        if delta >= 3:
+            add(
+                "resting_hr",
+                "Resting heart rate is elevated",
+                f"Resting heart rate is {rhr}, about {delta:.0f} bpm above your 30-day baseline. That can be an early sign of accumulated strain or incomplete recovery.",
+                "caution",
+            )
+        elif delta <= -3:
+            add(
+                "resting_hr",
+                "Resting heart rate looks fresher than usual",
+                f"Resting heart rate is {rhr}, around {abs(delta):.0f} bpm below your 30-day baseline. That usually points to a calmer recovery state than normal.",
+                "positive",
+            )
+
+    trend_insight = next((item for item in history_context.get("insights", []) if item), None) or next(
+        (item for item in trend_data.get("insights", []) if item),
+        None,
+    )
+    if trend_insight:
+        add("daily_overview", "Daily overview", trend_insight, "info")
+
+    if not notifications:
+        add(
+            "daily_overview",
+            "Daily overview",
+            "No single metric is breaking away from baseline today, so the overall picture looks fairly stable rather than unusually strong or weak.",
+            "info",
+        )
+
+    return notifications[:4]
+
+
+def _save_daily_notifications(email: str, notification_date: date, notifications: list[dict[str, Any]]) -> None:
+    now = _now()
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            for item in notifications:
+                connection.execute(
+                    """
+                    INSERT INTO daily_notifications (
+                        email, notification_date, notification_id, title, body, metric_key, severity, dismissed_at, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                    ON CONFLICT(email, notification_id) DO UPDATE SET
+                        title = excluded.title,
+                        body = excluded.body,
+                        metric_key = excluded.metric_key,
+                        severity = excluded.severity,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        email,
+                        notification_date.isoformat(),
+                        item["notification_id"],
+                        item["title"],
+                        item["body"],
+                        item.get("metric_key"),
+                        item.get("severity", "info"),
+                        now,
+                        now,
+                    ),
+                )
+            connection.commit()
+
+
+def _dismiss_daily_notification(email: str, notification_id: str) -> None:
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                """
+                UPDATE daily_notifications
+                SET dismissed_at = ?, updated_at = ?
+                WHERE email = ? AND notification_id = ?
+                """,
+                (_now(), _now(), email, notification_id),
+            )
+            connection.commit()
+
+
+def _load_daily_notifications(email: str, limit: int = 20) -> dict[str, Any]:
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            rows = connection.execute(
+                """
+                SELECT notification_date, notification_id, title, body, metric_key, severity, dismissed_at
+                FROM daily_notifications
+                WHERE email = ?
+                ORDER BY notification_date DESC, created_at DESC
+                LIMIT ?
+                """,
+                (email, limit),
+            ).fetchall()
+
+    items = [
+        {
+            "date": row[0],
+            "id": row[1],
+            "title": row[2],
+            "body": row[3],
+            "metric_key": row[4],
+            "severity": row[5],
+            "dismissed": row[6] is not None,
+        }
+        for row in rows
+    ]
+    return {
+        "active": [item for item in items if not item["dismissed"]],
+        "history": items,
+    }
+
+
 def _current_metric_rows(bundle: dict[str, Any]) -> list[dict[str, str]]:
     snapshot = _build_daily_snapshot(bundle, date.today())
     rows: list[tuple[str, str | None]] = [
@@ -1313,6 +1585,10 @@ def _extract_device_status(bundle: dict[str, Any]) -> dict[str, Any]:
     battery_percent = _deep_find_first(device, {"batteryLevel", "batteryPercent", "batteryPercentage"})
     if battery_percent in (None, "", [], {}):
         battery_percent = _deep_find_first(settings, {"batteryLevel", "batteryPercent", "batteryPercentage"})
+    if battery_percent in (None, "", [], {}):
+        battery_percent = _deep_find_numeric_key_fragment(device, ("battery", "charge"))
+    if battery_percent in (None, "", [], {}):
+        battery_percent = _deep_find_numeric_key_fragment(settings, ("battery", "charge"))
     device_id = (
         device.get("deviceId")
         or device.get("unitId")
@@ -1473,19 +1749,19 @@ def _summarize_shortcuts(
 
     return {
         "summary": {
-            "headline": "Garmin signals ready for chat",
+            "headline": "",
             "subheadline": "",
-            "observations": (brief["observations"] + history_insights)[:5],
+            "observations": [],
         },
         "cards": cards,
         "current_metrics": _current_metric_rows(full_context_data),
         "device_status": _extract_device_status(full_context_data),
         "source_inventory": brief["source_inventory"],
         "suggested_questions": brief["suggested_questions"],
-        "warnings": trend_data.get("warnings", []) + (
+        "warnings": _present_warnings(trend_data.get("warnings", [])) + (
             []
             if history_days
-            else ["Health-history sync is empty. Sleep, stress, recovery, and body battery trends improve after syncing history."]
+            else ["Health history is still thin. Sleep, stress, recovery, and Body Battery trends get better after syncing more days."]
         ),
     }
 
@@ -1505,6 +1781,27 @@ def _question_language(question: str) -> str:
     return "ro" if any(marker in lowered for marker in romanian_markers) else "en"
 
 
+def _should_try_ollama(question: str) -> bool:
+    if _question_matches(
+        question,
+        "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit",
+        "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready", "recuperare", "gata",
+        "activity", "activities", "workout", "run", "ride", "training", "recent", "activitate", "antrenament",
+        "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume", "bază", "luni",
+    ):
+        return False
+    return len(question.split()) >= 6
+
+
+def _ollama_language_matches(answer: str, language: str) -> bool:
+    lowered = answer.lower()
+    if language == "ro":
+        romanian_markers = (" este ", " sunt ", " și ", " pentru ", " azi", "somn", "recuper", "antren")
+        return any(marker in lowered for marker in romanian_markers)
+    english_markers = (" the ", " and ", " your ", " today", "sleep", "recovery", "training")
+    return any(marker in lowered for marker in english_markers)
+
+
 def _build_chat_answer(
     question: str,
     full_context_data: dict[str, Any],
@@ -1518,11 +1815,11 @@ def _build_chat_answer(
     recent_activities = _extract_recent_activities(full_context_data)
     windows = trend_data.get("windows", {})
     health_windows = history_context.get("windows", {})
-    warnings = trend_data.get("warnings", [])
+    warnings = _present_warnings(trend_data.get("warnings", []), language=language)
     answer = (
-        "Îți văd profilul Garmin, dar am nevoie de o întrebare mai specifică pentru un răspuns util."
+        "Îți pot citi datele Garmin, dar am nevoie de o întrebare puțin mai clară ca să-ți dau un răspuns bun."
         if language == "ro"
-        else "I can see your Garmin profile, but I need a more specific question to give a useful answer."
+        else "I can read your Garmin data, but I need a slightly clearer angle to give you a strong answer."
     )
     supporting_points: list[str] = []
     follow_ups = brief["suggested_questions"][:3]
@@ -1530,15 +1827,15 @@ def _build_chat_answer(
     if _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit"):
         sleep_duration = _format_minutes(current.get("sleep_minutes"))
         answer = (
-            "Recuperarea de peste noapte pare mixtă pe baza semnalelor de somn și recovery pe care le văd."
+            "Recuperarea de peste noapte pare decentă, dar o judec în contextul somnului, stresului și energiei disponibile azi."
             if language == "ro"
-            else "Your overnight recovery looks mixed based on the sleep and recovery signals I can see."
+            else "Your overnight recovery looks reasonably solid, but I’d read it in the context of sleep, stress, and available energy today."
         )
         if current.get("sleep_score") not in (None, ""):
             answer = (
-                f"Scorul tău de somn este {current['sleep_score']}, acesta fiind cel mai puternic semnal overnight disponibil acum."
+                f"Scorul tău de somn este {current['sleep_score']}, iar acesta este cel mai bun indicator overnight disponibil pentru cum începe ziua."
                 if language == "ro"
-                else f"Your sleep score is {current['sleep_score']}, which is the strongest overnight signal available right now."
+                else f"Your sleep score is {current['sleep_score']}, and that is the strongest overnight signal for how you’re starting the day."
             )
         if sleep_duration:
             supporting_points.append(f"{'Durata somnului' if language == 'ro' else 'Sleep duration'}: {sleep_duration}.")
@@ -1549,8 +1846,10 @@ def _build_chat_answer(
         recent_sleep = health_windows.get("7d", {}).get("sleep_score", {}).get("average")
         baseline_sleep = health_windows.get("30d", {}).get("sleep_score", {}).get("average")
         if recent_sleep is not None and baseline_sleep is not None:
-            supporting_points.append(
-                f"{'Media scorului de somn pe 7 zile' if language == 'ro' else '7d sleep score average'}: {recent_sleep} {'față de baseline-ul pe 30 zile' if language == 'ro' else 'versus 30d baseline'} {baseline_sleep}."
+            answer += (
+                f" Pe termen scurt, somnul tău rulează la {recent_sleep} față de un baseline pe 30 de zile de {baseline_sleep}."
+                if language == "ro"
+                else f" In short-term context, your 7-day sleep average is {recent_sleep} against a 30-day baseline of {baseline_sleep}."
             )
         follow_ups = (
             [
@@ -1565,15 +1864,15 @@ def _build_chat_answer(
         )
     elif _question_matches(question, "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready", "recuperare", "gata"):
         answer = (
-            "Întrebarea ta ține de recuperare și readiness, așa că pun accent pe training readiness, Body Battery, HRV, stres și somn."
+            "Pentru întrebarea asta mă uit în primul rând la readiness, Body Battery, HRV, stres și somn, fiindcă împreună descriu cel mai bine cât de bine ai absorbit efortul recent."
             if language == "ro"
-            else "Today looks like a recovery and readiness question, so I’m weighting training readiness, Body Battery, HRV, stress, and sleep."
+            else "For this question I’m weighting readiness, Body Battery, HRV, stress, and sleep, because together they describe how well you absorbed recent load."
         )
         if current.get("training_readiness") not in (None, ""):
             answer = (
-                f"Training readiness este {current['training_readiness']}, ceea ce sugerează capacitatea ta actuală de antrenament pentru azi."
+                f"Training readiness este {current['training_readiness']}, ceea ce sugerează cât de pregătit pari pentru încărcare azi."
                 if language == "ro"
-                else f"Training readiness is {current['training_readiness']}, which suggests your current capacity for training today."
+                else f"Training readiness is {current['training_readiness']}, which is the clearest single signal of how ready you are for load today."
             )
         for value in [
             f"{'Body Battery' if language == 'ro' else 'Body Battery'}: {current['body_battery']}." if current.get("body_battery") not in (None, "") else None,
@@ -1587,8 +1886,10 @@ def _build_chat_answer(
         recent_battery = health_windows.get("7d", {}).get("body_battery", {}).get("average")
         baseline_battery = health_windows.get("30d", {}).get("body_battery", {}).get("average")
         if recent_battery is not None and baseline_battery is not None:
-            supporting_points.append(
-                f"{'Media Body Battery pe 7 zile' if language == 'ro' else '7d Body Battery average'}: {recent_battery} {'față de baseline-ul pe 30 zile' if language == 'ro' else 'versus 30d baseline'} {baseline_battery}."
+            answer += (
+                f" În același timp, media Body Battery pe 7 zile este {recent_battery} față de un baseline pe 30 de zile de {baseline_battery}, ceea ce îți spune dacă azi vine dintr-o perioadă mai bună sau mai grea."
+                if language == "ro"
+                else f" Your 7-day Body Battery average is {recent_battery} against a 30-day baseline of {baseline_battery}, which helps show whether today sits on top of stronger or softer recent recovery."
             )
         follow_ups = (
             [
@@ -1605,9 +1906,9 @@ def _build_chat_answer(
         last_activity = recent_activities[0] if recent_activities else None
         if last_activity:
             answer = (
-                f"Cea mai recentă activitate înregistrată este {last_activity['type']} din {last_activity['date'].isoformat()}."
+                f"Cea mai recentă activitate vizibilă este {last_activity['type']} din {last_activity['date'].isoformat()}, iar asta îți oferă cel mai bun reper pentru încărcarea ta imediat anterioară."
                 if language == "ro"
-                else f"Your most recent recorded activity is a {last_activity['type']} from {last_activity['date'].isoformat()}."
+                else f"The clearest recent anchor I can see is a {last_activity['type']} from {last_activity['date'].isoformat()}, which is the best reference point for your most recent load."
             )
             for value in [
                 _format_km(last_activity["distance_km"]),
@@ -1618,9 +1919,9 @@ def _build_chat_answer(
                     supporting_points.append(str(value))
         else:
             answer = (
-                "Nu am găsit o activitate recentă pe care să o rezum."
+                "Nu văd acum o activitate recentă suficient de detaliată pentru un rezumat bun."
                 if language == "ro"
-                else "I could not find a recent activity payload to summarize."
+                else "I can’t see a detailed recent activity record to summarize well right now."
             )
         if "30d" in windows:
             supporting_points.append(
@@ -1696,11 +1997,11 @@ def _build_chat_answer(
         )
     else:
         answer = (
-            "Iată cea mai bună citire cross-signal a datelor tale Garmin chiar acum."
+            "Iată citirea cea mai utilă pe care o pot face acum, combinând semnalele Garmin între ele, nu doar listând valori."
             if language == "ro"
-            else "Here is the best cross-signal read of your Garmin data right now."
+            else "Here’s the most useful read I can give right now by combining your Garmin signals instead of just listing them."
         )
-        supporting_points.extend((brief["observations"] + history_context.get("insights", []))[:5])
+        supporting_points.extend((history_context.get("insights", []) + brief["observations"])[:3])
         if recent_activities:
             supporting_points.append(
                 (
@@ -1710,17 +2011,10 @@ def _build_chat_answer(
                 )
             )
 
-    if warnings:
-        supporting_points.append(
-            "Unele endpoint-uri istorice sunt parțial indisponibile acum, deci răspunsurile despre trend pot fi mai prudente."
-            if language == "ro"
-            else "Some historical endpoints are partially unavailable right now, so trend answers may be conservative."
-        )
-
     return {
         "question": question,
         "answer": answer,
-        "supporting_points": supporting_points[:6],
+        "supporting_points": supporting_points[:4],
         "follow_ups": follow_ups,
         "warnings": warnings,
         "used_sources": brief["source_inventory"]["available"],
@@ -1839,8 +2133,8 @@ async def _ask_ollama(
     if not _ollama_enabled():
         return None
 
-    configured_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "35"))
-    timeout = aiohttp.ClientTimeout(total=min(configured_timeout, 35.0))
+    configured_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "9"))
+    timeout = aiohttp.ClientTimeout(total=min(configured_timeout, 12.0))
     payload = {
         "model": _ollama_model(),
         "stream": False,
@@ -2201,16 +2495,37 @@ async def shortcuts(request: Request):
             today,
         )
         history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
+        notifications = {"active": [], "history": []}
         if stored_tokens is not None:
             _save_metric_snapshot(stored_tokens.email, _build_daily_snapshot(full_context_data, today))
             history_context = _build_history_context(stored_tokens.email, today)
+            _save_daily_notifications(
+                stored_tokens.email,
+                today,
+                _build_daily_notifications(full_context_data, trend_data, history_context, today),
+            )
+            notifications = _load_daily_notifications(stored_tokens.email)
         return {
             "as_of": today.isoformat(),
             "shortcuts": _summarize_shortcuts(full_context_data, trend_data, history_context=history_context),
             "history": history_context,
+            "notifications": notifications,
         }
 
     return await _with_client(fetch_shortcuts, request=request)
+
+
+@app.post("/api/notifications/{notification_id}/dismiss")
+async def dismiss_notification(notification_id: str, request: Request):
+    stored_tokens = _stored_tokens_for_request(request)
+    if stored_tokens is None:
+        raise HTTPException(status_code=401, detail="Connect Garmin before dismissing notifications.")
+
+    _dismiss_daily_notification(stored_tokens.email, notification_id)
+    return {
+        "ok": True,
+        "notifications": _load_daily_notifications(stored_tokens.email),
+    }
 
 
 @app.post("/api/chat")
@@ -2238,8 +2553,11 @@ async def chat(request_payload: GarminChatRequest, request: Request):
             trend_data,
             history_context=history_context,
         )
-        ollama_answer = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
-        if ollama_answer:
+        ollama_answer = None
+        question_language = _question_language(question)
+        if _should_try_ollama(question):
+            ollama_answer = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
+        if ollama_answer and _ollama_language_matches(ollama_answer, question_language):
             heuristic_response["answer"] = ollama_answer
             heuristic_response["mode"] = "ollama"
         else:
