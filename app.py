@@ -1459,6 +1459,16 @@ def _question_matches(question: str, *keywords: str) -> bool:
     return any(keyword in lowered for keyword in keywords)
 
 
+def _question_language(question: str) -> str:
+    lowered = question.lower()
+    romanian_markers = {
+        "ă", "â", "î", "ș", "ş", "ț", "ţ",
+        "cum", "azi", "maine", "mâine", "ieri", "somn", "stres", "recuperare",
+        "antrenament", "pași", "pasi", "activitate", "ultimele", "trend", "luni",
+    }
+    return "ro" if any(marker in lowered for marker in romanian_markers) else "en"
+
+
 def _build_chat_answer(
     question: str,
     full_context_data: dict[str, Any],
@@ -1467,85 +1477,159 @@ def _build_chat_answer(
 ) -> dict[str, Any]:
     history_context = history_context or {"windows": {}, "insights": [], "days_available": 0}
     brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
+    language = _question_language(question)
     current = brief["current_signals"]
     recent_activities = _extract_recent_activities(full_context_data)
     windows = trend_data.get("windows", {})
     health_windows = history_context.get("windows", {})
     warnings = trend_data.get("warnings", [])
-    answer = "I can see your Garmin profile, but I need a more specific question to give a useful answer."
+    answer = (
+        "Îți văd profilul Garmin, dar am nevoie de o întrebare mai specifică pentru un răspuns util."
+        if language == "ro"
+        else "I can see your Garmin profile, but I need a more specific question to give a useful answer."
+    )
     supporting_points: list[str] = []
     follow_ups = brief["suggested_questions"][:3]
 
-    if _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep"):
+    if _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit"):
         sleep_duration = _format_minutes(current.get("sleep_minutes"))
-        answer = "Your overnight recovery looks mixed based on the sleep and recovery signals I can see."
+        answer = (
+            "Recuperarea de peste noapte pare mixtă pe baza semnalelor de somn și recovery pe care le văd."
+            if language == "ro"
+            else "Your overnight recovery looks mixed based on the sleep and recovery signals I can see."
+        )
         if current.get("sleep_score") not in (None, ""):
-            answer = f"Your sleep score is {current['sleep_score']}, which is the strongest overnight signal available right now."
+            answer = (
+                f"Scorul tău de somn este {current['sleep_score']}, acesta fiind cel mai puternic semnal overnight disponibil acum."
+                if language == "ro"
+                else f"Your sleep score is {current['sleep_score']}, which is the strongest overnight signal available right now."
+            )
         if sleep_duration:
-            supporting_points.append(f"Sleep duration: {sleep_duration}.")
+            supporting_points.append(f"{'Durata somnului' if language == 'ro' else 'Sleep duration'}: {sleep_duration}.")
         if current.get("body_battery") not in (None, ""):
-            supporting_points.append(f"Body Battery today: {current['body_battery']}.")
+            supporting_points.append(f"{'Body Battery azi' if language == 'ro' else 'Body Battery today'}: {current['body_battery']}.")
         if current.get("stress_level") not in (None, ""):
-            supporting_points.append(f"Stress signal: {current['stress_level']}.")
+            supporting_points.append(f"{'Semnal stres' if language == 'ro' else 'Stress signal'}: {current['stress_level']}.")
         recent_sleep = health_windows.get("7d", {}).get("sleep_score", {}).get("average")
         baseline_sleep = health_windows.get("30d", {}).get("sleep_score", {}).get("average")
         if recent_sleep is not None and baseline_sleep is not None:
-            supporting_points.append(f"7d sleep score average: {recent_sleep} versus 30d baseline {baseline_sleep}.")
-        follow_ups = [
-            "Do my sleep and readiness point to a hard session or an easy day?",
-            "How does today compare with my recent baseline?",
-        ]
-    elif _question_matches(question, "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready"):
-        answer = "Today looks like a recovery and readiness question, so I’m weighting training readiness, Body Battery, HRV, stress, and sleep."
+            supporting_points.append(
+                f"{'Media scorului de somn pe 7 zile' if language == 'ro' else '7d sleep score average'}: {recent_sleep} {'față de baseline-ul pe 30 zile' if language == 'ro' else 'versus 30d baseline'} {baseline_sleep}."
+            )
+        follow_ups = (
+            [
+                "Somnul și readiness-ul indică o zi grea sau una ușoară?",
+                "Cum se compară azi cu baseline-ul meu recent?",
+            ]
+            if language == "ro"
+            else [
+                "Do my sleep and readiness point to a hard session or an easy day?",
+                "How does today compare with my recent baseline?",
+            ]
+        )
+    elif _question_matches(question, "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready", "recuperare", "gata"):
+        answer = (
+            "Întrebarea ta ține de recuperare și readiness, așa că pun accent pe training readiness, Body Battery, HRV, stres și somn."
+            if language == "ro"
+            else "Today looks like a recovery and readiness question, so I’m weighting training readiness, Body Battery, HRV, stress, and sleep."
+        )
         if current.get("training_readiness") not in (None, ""):
-            answer = f"Training readiness is {current['training_readiness']}, which suggests your current capacity for training today."
+            answer = (
+                f"Training readiness este {current['training_readiness']}, ceea ce sugerează capacitatea ta actuală de antrenament pentru azi."
+                if language == "ro"
+                else f"Training readiness is {current['training_readiness']}, which suggests your current capacity for training today."
+            )
         for value in [
-            f"Body Battery: {current['body_battery']}." if current.get("body_battery") not in (None, "") else None,
-            f"HRV status: {current['hrv_status']}." if current.get("hrv_status") not in (None, "") else None,
-            f"Sleep score: {current['sleep_score']}." if current.get("sleep_score") not in (None, "") else None,
-            f"Stress level: {current['stress_level']}." if current.get("stress_level") not in (None, "") else None,
-            f"Training status: {current['training_status']}." if current.get("training_status") not in (None, "") else None,
+            f"{'Body Battery' if language == 'ro' else 'Body Battery'}: {current['body_battery']}." if current.get("body_battery") not in (None, "") else None,
+            f"{'Status HRV' if language == 'ro' else 'HRV status'}: {current['hrv_status']}." if current.get("hrv_status") not in (None, "") else None,
+            f"{'Scor somn' if language == 'ro' else 'Sleep score'}: {current['sleep_score']}." if current.get("sleep_score") not in (None, "") else None,
+            f"{'Nivel stres' if language == 'ro' else 'Stress level'}: {current['stress_level']}." if current.get("stress_level") not in (None, "") else None,
+            f"{'Status antrenament' if language == 'ro' else 'Training status'}: {current['training_status']}." if current.get("training_status") not in (None, "") else None,
         ]:
             if value:
                 supporting_points.append(value)
         recent_battery = health_windows.get("7d", {}).get("body_battery", {}).get("average")
         baseline_battery = health_windows.get("30d", {}).get("body_battery", {}).get("average")
         if recent_battery is not None and baseline_battery is not None:
-            supporting_points.append(f"7d Body Battery average: {recent_battery} versus 30d baseline {baseline_battery}.")
-        follow_ups = [
-            "Should I train hard today or back off?",
-            "What is the strongest recovery signal right now?",
-        ]
-    elif _question_matches(question, "activity", "activities", "workout", "run", "ride", "training", "recent"):
+            supporting_points.append(
+                f"{'Media Body Battery pe 7 zile' if language == 'ro' else '7d Body Battery average'}: {recent_battery} {'față de baseline-ul pe 30 zile' if language == 'ro' else 'versus 30d baseline'} {baseline_battery}."
+            )
+        follow_ups = (
+            [
+                "Ar trebui să trag tare azi sau să reduc intensitatea?",
+                "Care este acum cel mai puternic semnal de recuperare?",
+            ]
+            if language == "ro"
+            else [
+                "Should I train hard today or back off?",
+                "What is the strongest recovery signal right now?",
+            ]
+        )
+    elif _question_matches(question, "activity", "activities", "workout", "run", "ride", "training", "recent", "activitate", "antrenament"):
         last_activity = recent_activities[0] if recent_activities else None
         if last_activity:
-            answer = f"Your most recent recorded activity is a {last_activity['type']} from {last_activity['date'].isoformat()}."
+            answer = (
+                f"Cea mai recentă activitate înregistrată este {last_activity['type']} din {last_activity['date'].isoformat()}."
+                if language == "ro"
+                else f"Your most recent recorded activity is a {last_activity['type']} from {last_activity['date'].isoformat()}."
+            )
             for value in [
                 _format_km(last_activity["distance_km"]),
                 _format_minutes(last_activity["duration_min"]),
-                f"Average HR {round(last_activity['average_hr'])}" if last_activity["average_hr"] > 0 else None,
+                f"{'Puls mediu' if language == 'ro' else 'Average HR'} {round(last_activity['average_hr'])}" if last_activity["average_hr"] > 0 else None,
             ]:
                 if value:
                     supporting_points.append(str(value))
         else:
-            answer = "I could not find a recent activity payload to summarize."
+            answer = (
+                "Nu am găsit o activitate recentă pe care să o rezum."
+                if language == "ro"
+                else "I could not find a recent activity payload to summarize."
+            )
         if "30d" in windows:
-            supporting_points.append(f"30-day activity count: {windows['30d']['activities']['count']}.")
-        follow_ups = [
-            "How does my last workout compare with my recent trend?",
-            "Am I building or losing training momentum?",
-        ]
-    elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume"):
+            supporting_points.append(
+                f"{'Număr activități pe 30 zile' if language == 'ro' else '30-day activity count'}: {windows['30d']['activities']['count']}."
+            )
+        follow_ups = (
+            [
+                "Cum se compară ultimul antrenament cu trendul meu recent?",
+                "Îmi construiesc sau îmi pierd momentum-ul de antrenament?",
+            ]
+            if language == "ro"
+            else [
+                "How does my last workout compare with my recent trend?",
+                "Am I building or losing training momentum?",
+            ]
+        )
+    elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume", "trend", "bază", "baseline", "luni"):
         insight = trend_data.get("insights", ["Trend data is limited right now."])[0]
         answer = history_context.get("insights", [insight])[0] if history_context.get("insights") else insight
+        if language == "ro":
+            translations = {
+                "Sleep score is running above your 30-day baseline over the last 7 days.": "Scorul de somn este peste baseline-ul tău pe 30 de zile în ultimele 7 zile.",
+                "Sleep score is running below your 30-day baseline over the last 7 days.": "Scorul de somn este sub baseline-ul tău pe 30 de zile în ultimele 7 zile.",
+                "Average stress has been elevated versus your 30-day baseline.": "Stresul mediu a fost mai ridicat decât baseline-ul tău pe 30 de zile.",
+                "Average stress has been lower than your 30-day baseline.": "Stresul mediu a fost sub baseline-ul tău pe 30 de zile.",
+                "Body Battery has been stronger than usual over the last 7 days.": "Body Battery a fost mai bun decât de obicei în ultimele 7 zile.",
+                "Body Battery has been softer than your 30-day baseline lately.": "Body Battery a fost sub baseline-ul tău pe 30 de zile în ultima perioadă.",
+                "Resting heart rate is running above baseline, which can point to accumulated strain.": "Pulsul în repaus este peste baseline, ceea ce poate indica oboseală acumulată.",
+                "Resting heart rate is below baseline, which can point to fresher recovery.": "Pulsul în repaus este sub baseline, ceea ce poate indica o recuperare mai bună.",
+            }
+            answer = translations.get(answer, answer)
         for label in ("7d", "30d", "90d", "12m"):
             window = windows.get(label)
             if not window:
                 continue
             supporting_points.append(
-                f"{label}: {window['steps']['daily_average']} avg steps, "
-                f"{window['activities']['count']} activities, "
-                f"{window['activities']['total_distance_km']} km."
+                (
+                    f"{label}: {window['steps']['daily_average']} pași medii, "
+                    f"{window['activities']['count']} activități, "
+                    f"{window['activities']['total_distance_km']} km."
+                    if language == "ro"
+                    else f"{label}: {window['steps']['daily_average']} avg steps, "
+                    f"{window['activities']['count']} activities, "
+                    f"{window['activities']['total_distance_km']} km."
+                )
             )
         for label in ("7d", "30d", "90d", "12m"):
             window = health_windows.get(label)
@@ -1555,23 +1639,47 @@ def _build_chat_answer(
             sleep_average = window["sleep_score"]["average"]
             if stress_average is not None or sleep_average is not None:
                 supporting_points.append(
-                    f"{label}: sleep score avg {sleep_average if sleep_average is not None else 'n/a'}, "
-                    f"stress avg {stress_average if stress_average is not None else 'n/a'}."
+                    (
+                        f"{label}: scor somn mediu {sleep_average if sleep_average is not None else 'n/a'}, "
+                        f"stres mediu {stress_average if stress_average is not None else 'n/a'}."
+                        if language == "ro"
+                        else f"{label}: sleep score avg {sleep_average if sleep_average is not None else 'n/a'}, "
+                        f"stress avg {stress_average if stress_average is not None else 'n/a'}."
+                    )
                 )
-        follow_ups = [
-            "Is my last week above or below baseline?",
-            "What changed most over the last 90 days?",
-        ]
+        follow_ups = (
+            [
+                "Ultima săptămână este peste sau sub baseline?",
+                "Ce s-a schimbat cel mai mult în ultimele 90 de zile?",
+            ]
+            if language == "ro"
+            else [
+                "Is my last week above or below baseline?",
+                "What changed most over the last 90 days?",
+            ]
+        )
     else:
-        answer = "Here is the best cross-signal read of your Garmin data right now."
+        answer = (
+            "Iată cea mai bună citire cross-signal a datelor tale Garmin chiar acum."
+            if language == "ro"
+            else "Here is the best cross-signal read of your Garmin data right now."
+        )
         supporting_points.extend((brief["observations"] + history_context.get("insights", []))[:5])
         if recent_activities:
             supporting_points.append(
-                f"Latest activity: {recent_activities[0]['type']} on {recent_activities[0]['date'].isoformat()}."
+                (
+                    f"Cea mai recentă activitate: {recent_activities[0]['type']} din {recent_activities[0]['date'].isoformat()}."
+                    if language == "ro"
+                    else f"Latest activity: {recent_activities[0]['type']} on {recent_activities[0]['date'].isoformat()}."
+                )
             )
 
     if warnings:
-        supporting_points.append("Some historical endpoints are partially unavailable right now, so trend answers may be conservative.")
+        supporting_points.append(
+            "Unele endpoint-uri istorice sunt parțial indisponibile acum, deci răspunsurile despre trend pot fi mai prudente."
+            if language == "ro"
+            else "Some historical endpoints are partially unavailable right now, so trend answers may be conservative."
+        )
 
     return {
         "question": question,
