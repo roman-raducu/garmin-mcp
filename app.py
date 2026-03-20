@@ -3,6 +3,8 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -26,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "garmin_session"
 PENDING_AUTH_TTL_SECONDS = 10 * 60
+TOKEN_DB_PATH = os.getenv("GARMIN_STATE_DB_PATH", "/tmp/garmin_state.db")
 
 
 @dataclass
@@ -57,6 +60,7 @@ class GarminMfaRequest(BaseModel):
 TOKEN_STORE: dict[str, StoredTokens] = {}
 PENDING_AUTHS: dict[str, PendingAuth] = {}
 GARTH_AUTH_LOCK = asyncio.Lock()
+TOKEN_DB_LOCK = threading.Lock()
 TREND_WINDOWS: tuple[tuple[str, str, int | None, int | None], ...] = (
     ("7d", "Last 7 days", 7, None),
     ("30d", "Last 30 days", 30, None),
@@ -66,6 +70,27 @@ TREND_WINDOWS: tuple[tuple[str, str, int | None, int | None], ...] = (
     ("9m", "Last 9 months", None, 9),
     ("12m", "Last 12 months", None, 12),
 )
+
+
+def _init_token_db() -> None:
+    db_dir = os.path.dirname(TOKEN_DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS browser_tokens (
+                    browser_session_id TEXT PRIMARY KEY,
+                    email TEXT NOT NULL,
+                    oauth1_token_json TEXT NOT NULL,
+                    oauth2_token_json TEXT NOT NULL,
+                    connected_at REAL NOT NULL
+                )
+                """
+            )
+            connection.commit()
 
 
 def _now() -> float:
@@ -109,7 +134,7 @@ async def _cleanup_pending_auths() -> None:
 
 
 async def _clear_browser_auth(browser_session_id: str) -> None:
-    TOKEN_STORE.pop(browser_session_id, None)
+    _delete_browser_tokens(browser_session_id)
     pending_ids = [
         pending_id
         for pending_id, pending in PENDING_AUTHS.items()
@@ -162,34 +187,119 @@ def _env_tokens() -> StoredTokens | None:
     )
 
 
-def _extract_garth_tokens(result: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    def token_to_dict(token: Any) -> dict[str, Any] | None:
-        if isinstance(token, dict):
-            return token
-        if hasattr(token, "model_dump"):
-            return token.model_dump()
-        if hasattr(token, "dict"):
-            return token.dict()
-        if hasattr(token, "__dict__"):
-            return {
-                key: value
-                for key, value in vars(token).items()
-                if not key.startswith("_")
-            }
+def _token_to_dict(token: Any) -> dict[str, Any] | None:
+    if isinstance(token, dict):
+        return token
+    if hasattr(token, "model_dump"):
+        return token.model_dump()
+    if hasattr(token, "dict"):
+        return token.dict()
+    if hasattr(token, "__dict__"):
+        return {
+            key: value
+            for key, value in vars(token).items()
+            if not key.startswith("_")
+        }
+    return None
+
+
+def _save_browser_tokens(browser_session_id: str, stored_tokens: StoredTokens) -> None:
+    TOKEN_STORE[browser_session_id] = stored_tokens
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                """
+                INSERT INTO browser_tokens (
+                    browser_session_id,
+                    email,
+                    oauth1_token_json,
+                    oauth2_token_json,
+                    connected_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(browser_session_id) DO UPDATE SET
+                    email = excluded.email,
+                    oauth1_token_json = excluded.oauth1_token_json,
+                    oauth2_token_json = excluded.oauth2_token_json,
+                    connected_at = excluded.connected_at
+                """,
+                (
+                    browser_session_id,
+                    stored_tokens.email,
+                    json.dumps(stored_tokens.oauth1_token),
+                    json.dumps(stored_tokens.oauth2_token),
+                    stored_tokens.connected_at,
+                ),
+            )
+            connection.commit()
+
+
+def _load_browser_tokens(browser_session_id: str | None) -> StoredTokens | None:
+    if not browser_session_id:
         return None
 
+    cached = TOKEN_STORE.get(browser_session_id)
+    if cached is not None:
+        return cached
+
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            row = connection.execute(
+                """
+                SELECT email, oauth1_token_json, oauth2_token_json, connected_at
+                FROM browser_tokens
+                WHERE browser_session_id = ?
+                """,
+                (browser_session_id,),
+            ).fetchone()
+
+    if row is None:
+        return None
+
+    stored_tokens = StoredTokens(
+        email=row[0],
+        oauth1_token=json.loads(row[1]),
+        oauth2_token=json.loads(row[2]),
+        connected_at=float(row[3]),
+    )
+    TOKEN_STORE[browser_session_id] = stored_tokens
+    return stored_tokens
+
+
+def _delete_browser_tokens(browser_session_id: str) -> None:
+    TOKEN_STORE.pop(browser_session_id, None)
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                "DELETE FROM browser_tokens WHERE browser_session_id = ?",
+                (browser_session_id,),
+            )
+            connection.commit()
+
+
+def _extract_auth_tokens(auth: GarminAuth) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    oauth1_token = _token_to_dict(getattr(auth, "oauth1_token", None))
+    oauth2_token = _token_to_dict(getattr(auth, "oauth2_token", None))
+    if oauth1_token and oauth2_token:
+        return oauth1_token, oauth2_token
+    return None
+
+
+_init_token_db()
+
+
+def _extract_garth_tokens(result: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     if (
         isinstance(result, tuple)
         and len(result) == 2
     ):
-        oauth1_token = token_to_dict(result[0])
-        oauth2_token = token_to_dict(result[1])
+        oauth1_token = _token_to_dict(result[0])
+        oauth2_token = _token_to_dict(result[1])
         if oauth1_token and oauth2_token:
             return oauth1_token, oauth2_token
 
     client = getattr(garth, "client", None)
-    oauth1_token = token_to_dict(getattr(client, "oauth1_token", None))
-    oauth2_token = token_to_dict(getattr(client, "oauth2_token", None))
+    oauth1_token = _token_to_dict(getattr(client, "oauth1_token", None))
+    oauth2_token = _token_to_dict(getattr(client, "oauth2_token", None))
 
     if oauth1_token and oauth2_token:
         return oauth1_token, oauth2_token
@@ -205,8 +315,9 @@ def _stored_tokens_for_request(request: Request | None) -> StoredTokens | None:
         return _env_tokens()
 
     browser_session_id = _browser_session_id(request)
-    if browser_session_id and browser_session_id in TOKEN_STORE:
-        return TOKEN_STORE[browser_session_id]
+    stored_tokens = _load_browser_tokens(browser_session_id)
+    if stored_tokens is not None:
+        return stored_tokens
 
     return _env_tokens()
 
@@ -255,12 +366,28 @@ async def _with_client(
     request: Request | None = None,
 ) -> Any:
     timeout = aiohttp.ClientTimeout(total=30)
+    browser_session_id = _browser_session_id(request) if request is not None else None
+    stored_tokens = _stored_tokens_for_request(request)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             auth = await _build_auth(session, request=request)
             client = GarminClient(session, auth)
-            return await operation(client)
+            result = await operation(client)
+            if browser_session_id and stored_tokens is not None:
+                refreshed_tokens = _extract_auth_tokens(auth)
+                if refreshed_tokens is not None:
+                    oauth1_token, oauth2_token = refreshed_tokens
+                    _save_browser_tokens(
+                        browser_session_id,
+                        StoredTokens(
+                            email=stored_tokens.email,
+                            oauth1_token=oauth1_token,
+                            oauth2_token=oauth2_token,
+                            connected_at=stored_tokens.connected_at,
+                        ),
+                    )
+            return result
     except HTTPException:
         raise
     except asyncio.TimeoutError as exc:
@@ -755,14 +882,14 @@ def _pending_status_for_browser(browser_session_id: str | None) -> dict[str, Any
 
 def _browser_has_tokens(request: Request) -> bool:
     browser_session_id = _browser_session_id(request)
-    return bool(browser_session_id and browser_session_id in TOKEN_STORE)
+    return _load_browser_tokens(browser_session_id) is not None
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     await _cleanup_pending_auths()
     browser_session_id, needs_cookie = _ensure_browser_session_id(request)
-    if browser_session_id in TOKEN_STORE:
+    if _load_browser_tokens(browser_session_id) is not None:
         return RedirectResponse(url="/dashboard", status_code=303)
 
     response = templates.TemplateResponse(
@@ -794,7 +921,7 @@ def healthz_head():
 async def session_status(request: Request):
     await _cleanup_pending_auths()
     browser_session_id = _browser_session_id(request)
-    stored_tokens = TOKEN_STORE.get(browser_session_id) if browser_session_id else None
+    stored_tokens = _load_browser_tokens(browser_session_id)
     pending = _pending_status_for_browser(browser_session_id)
 
     return {
@@ -812,7 +939,7 @@ async def dashboard(request: Request):
         return RedirectResponse(url="/", status_code=303)
 
     browser_session_id = _browser_session_id(request)
-    stored_tokens = TOKEN_STORE.get(browser_session_id) if browser_session_id else None
+    stored_tokens = _load_browser_tokens(browser_session_id)
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -862,11 +989,14 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
             return response
 
         oauth1_token, oauth2_token = _extract_garth_tokens(login_result)
-        TOKEN_STORE[browser_session_id] = StoredTokens(
-            email=payload.email,
-            oauth1_token=oauth1_token,
-            oauth2_token=oauth2_token,
-            connected_at=_now(),
+        _save_browser_tokens(
+            browser_session_id,
+            StoredTokens(
+                email=payload.email,
+                oauth1_token=oauth1_token,
+                oauth2_token=oauth2_token,
+                connected_at=_now(),
+            ),
         )
         response = JSONResponse({"status": "connected", "email": payload.email})
         if needs_cookie:
@@ -927,11 +1057,14 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
 
         oauth1_token, oauth2_token = _extract_garth_tokens(result)
 
-        TOKEN_STORE[browser_session_id] = StoredTokens(
-            email=pending.email,
-            oauth1_token=oauth1_token,
-            oauth2_token=oauth2_token,
-            connected_at=_now(),
+        _save_browser_tokens(
+            browser_session_id,
+            StoredTokens(
+                email=pending.email,
+                oauth1_token=oauth1_token,
+                oauth2_token=oauth2_token,
+                connected_at=_now(),
+            ),
         )
         await _close_pending_auth(payload.pending_id)
         response = JSONResponse({"status": "connected", "email": pending.email})
