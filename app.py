@@ -1056,8 +1056,12 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
         "weight_kg": _coerce_float(_first_present(
             body_data.get("weightKg") if isinstance(body_data, dict) else None,
             body_data.get("weight") if isinstance(body_data, dict) else None,
+            _deep_find_first(body_data, {"weightKg", "weight", "weightInKg", "weightKG"}),
         )),
-        "body_fat_pct": _coerce_float(body_data.get("bodyFat") if isinstance(body_data, dict) else None),
+        "body_fat_pct": _coerce_float(_first_present(
+            body_data.get("bodyFat") if isinstance(body_data, dict) else None,
+            _deep_find_first(body_data, {"bodyFat", "bodyFatPercent", "bodyFatPercentage"}),
+        )),
         "fitness_age": _coerce_float(_first_present(
             body_data.get("fitnessAge") if isinstance(body_data, dict) else None,
             _deep_find_first(fitness_age_data or body_data, {"fitnessAge", "fitnessAgeValue", "value"}),
@@ -1229,13 +1233,23 @@ def _build_health_history_windows(snapshots: list[dict[str, Any]], today: date) 
             "end_date": today.isoformat(),
             "days_covered": len(window_snapshots),
             "steps": _summarize_snapshot_metric(window_snapshots, "steps"),
+            "active_kcal": _summarize_snapshot_metric(window_snapshots, "active_kcal"),
             "sleep_score": _summarize_snapshot_metric(window_snapshots, "sleep_score"),
             "sleep_minutes": _summarize_snapshot_metric(window_snapshots, "sleep_minutes"),
             "body_battery": _summarize_snapshot_metric(window_snapshots, "body_battery_current"),
             "stress": _summarize_snapshot_metric(window_snapshots, "stress_avg"),
             "resting_hr": _summarize_snapshot_metric(window_snapshots, "resting_hr"),
+            "training_readiness": _summarize_snapshot_metric(window_snapshots, "training_readiness"),
+            "vo2max": _summarize_snapshot_metric(window_snapshots, "vo2max"),
+            "hrv_last_night_avg": _summarize_snapshot_metric(window_snapshots, "hrv_last_night_avg"),
             "hydration_ml": _summarize_snapshot_metric(window_snapshots, "hydration_ml"),
             "weight_kg": _summarize_snapshot_metric(window_snapshots, "weight_kg"),
+            "body_fat_pct": _summarize_snapshot_metric(window_snapshots, "body_fat_pct"),
+            "fitness_age": _summarize_snapshot_metric(window_snapshots, "fitness_age"),
+            "endurance_score": _summarize_snapshot_metric(window_snapshots, "endurance_score"),
+            "hill_score": _summarize_snapshot_metric(window_snapshots, "hill_score"),
+            "spo2_average": _summarize_snapshot_metric(window_snapshots, "spo2_average"),
+            "intensity_minutes": _summarize_snapshot_metric(window_snapshots, "intensity_minutes"),
         }
 
     return windows
@@ -1281,6 +1295,15 @@ def _build_health_history_insights(windows: dict[str, dict[str, Any]]) -> list[s
             insights.append("Resting heart rate is running above baseline, which can point to accumulated strain.")
         elif delta <= -3:
             insights.append("Resting heart rate is below baseline, which can point to fresher recovery.")
+
+    short_vo2 = short.get("vo2max", {}).get("average")
+    medium_vo2 = medium.get("vo2max", {}).get("average")
+    if short_vo2 is not None and medium_vo2 not in (None, 0):
+        delta = short_vo2 - medium_vo2
+        if delta >= 0.5:
+            insights.append("VO2 max has been trending above your 30-day baseline.")
+        elif delta <= -0.5:
+            insights.append("VO2 max has softened versus your 30-day baseline.")
 
     return insights
 
@@ -1328,6 +1351,8 @@ def _present_warnings(warnings: list[str], language: str = "en") -> list[str]:
     seen: set[str] = set()
     presented: list[str] = []
     for code in warnings:
+        if code.startswith("step_history_unavailable") or code.startswith("activity_history_unavailable"):
+            continue
         message = _warning_message(code, language)
         if message not in seen:
             seen.add(message)
@@ -1585,10 +1610,6 @@ def _extract_device_status(bundle: dict[str, Any]) -> dict[str, Any]:
     battery_percent = _deep_find_first(device, {"batteryLevel", "batteryPercent", "batteryPercentage"})
     if battery_percent in (None, "", [], {}):
         battery_percent = _deep_find_first(settings, {"batteryLevel", "batteryPercent", "batteryPercentage"})
-    if battery_percent in (None, "", [], {}):
-        battery_percent = _deep_find_numeric_key_fragment(device, ("battery", "charge"))
-    if battery_percent in (None, "", [], {}):
-        battery_percent = _deep_find_numeric_key_fragment(settings, ("battery", "charge"))
     device_id = (
         device.get("deviceId")
         or device.get("unitId")
@@ -1781,6 +1802,107 @@ def _question_language(question: str) -> str:
     return "ro" if any(marker in lowered for marker in romanian_markers) else "en"
 
 
+def _localized_suggested_questions(language: str) -> list[str]:
+    if language == "ro":
+        return [
+            "Cum se compară săptămâna asta cu baseline-ul meu pe 30 de zile?",
+            "Îmi construiesc sau îmi pierd momentum-ul de antrenament în ultimele 90 de zile?",
+            "Ce semnale arată dacă recuperarea de azi este bună sau slabă?",
+            "Ce pattern-uri ies în evidență între somn, readiness și volum de activitate?",
+        ]
+    return [
+        "How is my current week tracking versus my 30-day baseline?",
+        "Am I building or losing training momentum over the last 90 days?",
+        "What signals suggest recovery is good or poor today?",
+        "What patterns stand out across sleep, readiness, and activity volume?",
+    ]
+
+
+def _translate_history_insight(text: str, language: str) -> str:
+    if language != "ro":
+        return text
+    translations = {
+        "Sleep score is running above your 30-day baseline over the last 7 days.": "Scorul de somn este peste baseline-ul tău pe 30 de zile în ultimele 7 zile.",
+        "Sleep score is running below your 30-day baseline over the last 7 days.": "Scorul de somn este sub baseline-ul tău pe 30 de zile în ultimele 7 zile.",
+        "Average stress has been elevated versus your 30-day baseline.": "Stresul mediu a fost mai ridicat decât baseline-ul tău pe 30 de zile.",
+        "Average stress has been lower than your 30-day baseline.": "Stresul mediu a fost mai scăzut decât baseline-ul tău pe 30 de zile.",
+        "Body Battery has been stronger than usual over the last 7 days.": "Body Battery a fost mai bun decât de obicei în ultimele 7 zile.",
+        "Body Battery has been softer than your 30-day baseline lately.": "Body Battery a fost sub baseline-ul tău pe 30 de zile în ultima perioadă.",
+        "Resting heart rate is running above baseline, which can point to accumulated strain.": "Pulsul în repaus este peste baseline, ceea ce poate indica oboseală acumulată.",
+        "Resting heart rate is below baseline, which can point to fresher recovery.": "Pulsul în repaus este sub baseline, ceea ce poate indica o recuperare mai bună.",
+        "No strong directional pattern stands out yet from the current windows.": "Nu se vede încă un pattern direcțional puternic în ferestrele actuale.",
+    }
+    return translations.get(text, text)
+
+
+def _translate_observation(text: str, language: str) -> str:
+    if language != "ro":
+        return text
+    translations = {
+        "Training readiness today: ": "Training readiness azi: ",
+        "Body Battery signal today: ": "Semnal Body Battery azi: ",
+        "Sleep score today: ": "Scor somn azi: ",
+        "Resting heart rate today: ": "Puls în repaus azi: ",
+        "Steps today so far: ": "Pași azi până acum: ",
+    }
+    translated = text
+    for source, target in translations.items():
+        if translated.startswith(source):
+            return translated.replace(source, target, 1)
+    return translated
+
+
+def _metric_focus(question: str) -> dict[str, Any] | None:
+    catalog = [
+        {"id": "weight_kg", "history": "weight_kg", "keywords": ("weight", "greutate", "kilograme", "kg"), "label_en": "weight", "label_ro": "greutatea"},
+        {"id": "body_fat_pct", "history": "body_fat_pct", "keywords": ("body fat", "grasime", "grăsime", "fat"), "label_en": "body fat", "label_ro": "procentul de grăsime"},
+        {"id": "hydration_ml", "history": "hydration_ml", "keywords": ("hydration", "water", "hidrata", "apă", "apa"), "label_en": "hydration", "label_ro": "hidratarea"},
+        {"id": "vo2max", "history": "vo2max", "keywords": ("vo2", "vo2max"), "label_en": "VO2 max", "label_ro": "VO2 max"},
+        {"id": "hrv_last_night_avg", "history": "hrv_last_night_avg", "keywords": ("hrv",), "label_en": "HRV", "label_ro": "HRV"},
+        {"id": "spo2_average", "history": "spo2_average", "keywords": ("spo2", "oxygen", "oxigen"), "label_en": "SpO2", "label_ro": "SpO2"},
+        {"id": "training_readiness", "history": "training_readiness", "keywords": ("readiness", "ready", "recuperare", "pregatit", "pregătit"), "label_en": "training readiness", "label_ro": "training readiness"},
+        {"id": "endurance_score", "history": "endurance_score", "keywords": ("endurance",), "label_en": "endurance score", "label_ro": "endurance score"},
+        {"id": "hill_score", "history": "hill_score", "keywords": ("hill score", "hill"), "label_en": "hill score", "label_ro": "hill score"},
+        {"id": "fitness_age", "history": "fitness_age", "keywords": ("fitness age", "vârst", "varsta"), "label_en": "fitness age", "label_ro": "fitness age"},
+        {"id": "intensity_minutes", "history": "intensity_minutes", "keywords": ("intensity", "intensity minutes", "minute intense"), "label_en": "intensity minutes", "label_ro": "minutele de intensitate"},
+        {"id": "active_kcal", "history": "active_kcal", "keywords": ("calories", "kcal", "calorii"), "label_en": "active calories", "label_ro": "caloriile active"},
+        {"id": "steps", "history": "steps", "keywords": ("steps", "pași", "pasi"), "label_en": "steps", "label_ro": "pașii"},
+        {"id": "stress_avg", "history": "stress", "keywords": ("stress", "stres"), "label_en": "stress", "label_ro": "stresul"},
+        {"id": "resting_hr", "history": "resting_hr", "keywords": ("resting heart", "rhr", "puls", "heart rate"), "label_en": "resting heart rate", "label_ro": "pulsul în repaus"},
+        {"id": "sleep_score", "history": "sleep_score", "keywords": ("sleep score", "scor somn"), "label_en": "sleep score", "label_ro": "scorul de somn"},
+        {"id": "body_battery_current", "history": "body_battery", "keywords": ("body battery",), "label_en": "Body Battery", "label_ro": "Body Battery"},
+    ]
+    lowered = question.lower()
+    return next((item for item in catalog if any(keyword in lowered for keyword in item["keywords"])), None)
+
+
+def _format_metric_response_value(metric_id: str, snapshot: dict[str, Any]) -> str | None:
+    value = snapshot.get(metric_id)
+    if value in (None, "", 0):
+        return None
+    if metric_id == "weight_kg":
+        return f"{float(value):.1f} kg"
+    if metric_id == "body_fat_pct":
+        return f"{float(value):.1f}%"
+    if metric_id == "hydration_ml":
+        return _format_ml(value)
+    if metric_id == "vo2max":
+        return f"{float(value):.1f}"
+    if metric_id == "spo2_average":
+        return f"{float(value):.1f}%"
+    if metric_id == "fitness_age":
+        return f"{float(value):.1f}"
+    if metric_id == "endurance_score":
+        return f"{float(value):.1f}"
+    if metric_id == "hill_score":
+        return f"{float(value):.1f}"
+    if metric_id == "active_kcal":
+        return f"{int(float(value))} kcal"
+    if metric_id == "sleep_minutes":
+        return _format_minutes(value)
+    return str(value)
+
+
 def _should_try_ollama(question: str) -> bool:
     if _question_matches(
         question,
@@ -1788,6 +1910,7 @@ def _should_try_ollama(question: str) -> bool:
         "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready", "recuperare", "gata",
         "activity", "activities", "workout", "run", "ride", "training", "recent", "activitate", "antrenament",
         "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume", "bază", "luni",
+        "weight", "greutate", "body fat", "grasime", "hydration", "hidrata", "vo2", "spo2", "oxygen", "endurance", "hill", "fitness age", "calories", "calorii", "stress", "stres",
     ):
         return False
     return len(question.split()) >= 6
@@ -1812,6 +1935,7 @@ def _build_chat_answer(
     brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
     language = _question_language(question)
     current = brief["current_signals"]
+    current_snapshot = _build_daily_snapshot(full_context_data, date.today())
     recent_activities = _extract_recent_activities(full_context_data)
     windows = trend_data.get("windows", {})
     health_windows = history_context.get("windows", {})
@@ -1822,9 +1946,123 @@ def _build_chat_answer(
         else "I can read your Garmin data, but I need a slightly clearer angle to give you a strong answer."
     )
     supporting_points: list[str] = []
-    follow_ups = brief["suggested_questions"][:3]
+    follow_ups = _localized_suggested_questions(language)[:3]
+    metric_focus = _metric_focus(question)
 
-    if _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit"):
+    if metric_focus and metric_focus["id"] in {"vo2max", "stress_avg", "steps", "hydration_ml", "hrv_last_night_avg"}:
+        current_value = _format_metric_response_value(metric_focus["id"], current_snapshot)
+        avg_7d = _history_average(history_context, "7d", metric_focus["history"])
+        avg_30d = _history_average(history_context, "30d", metric_focus["history"])
+        avg_90d = _history_average(history_context, "90d", metric_focus["history"])
+        label = metric_focus["label_ro"] if language == "ro" else metric_focus["label_en"]
+        answer = (
+            f"Nu văd încă suficiente date istorice despre {label} ca să descriu un trend credibil."
+            if language == "ro"
+            else f"I don’t yet have enough historical data for {label} to describe a credible trend."
+        )
+
+        if current_value:
+            answer = (
+                f"Acum, {label} este {current_value}. Îți răspund pe această metrică, nu pe Body Battery, pentru că asta ai întrebat."
+                if language == "ro"
+                else f"Right now, your {label} is {current_value}. I’m answering on that metric specifically rather than defaulting to Body Battery."
+            )
+
+        if avg_7d is not None and avg_30d is not None:
+            delta = avg_7d - avg_30d
+            if metric_focus["id"] == "vo2max":
+                if delta >= 0.5:
+                    answer = (
+                        f"VO2 max arată constructiv: media pe 7 zile este {avg_7d:.1f}, peste media pe 30 de zile de {avg_30d:.1f}."
+                        if language == "ro"
+                        else f"Your VO2 max trend looks constructive: the 7-day average is {avg_7d:.1f}, above the 30-day average of {avg_30d:.1f}."
+                    )
+                elif delta <= -0.5:
+                    answer = (
+                        f"VO2 max pare ușor în recul: media pe 7 zile este {avg_7d:.1f}, sub media pe 30 de zile de {avg_30d:.1f}."
+                        if language == "ro"
+                        else f"Your VO2 max looks slightly softer: the 7-day average is {avg_7d:.1f}, below the 30-day average of {avg_30d:.1f}."
+                    )
+                else:
+                    answer = (
+                        f"VO2 max este destul de stabil: media pe 7 zile este {avg_7d:.1f}, foarte aproape de media pe 30 de zile de {avg_30d:.1f}."
+                        if language == "ro"
+                        else f"Your VO2 max looks fairly stable: the 7-day average is {avg_7d:.1f}, very close to the 30-day average of {avg_30d:.1f}."
+                    )
+            elif metric_focus["id"] == "stress_avg":
+                if delta >= 5:
+                    answer = (
+                        f"Stresul a crescut în ultima săptămână: media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile."
+                        if language == "ro"
+                        else f"Stress has been elevated over the last week: the 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days."
+                    )
+                elif delta <= -5:
+                    answer = (
+                        f"Stresul arată mai bine decât baseline-ul recent: media pe 7 zile este {avg_7d:.1f}, față de {avg_30d:.1f} pe 30 de zile."
+                        if language == "ro"
+                        else f"Stress looks better than your recent baseline: the 7-day average is {avg_7d:.1f} versus {avg_30d:.1f} over 30 days."
+                    )
+            elif metric_focus["id"] == "steps":
+                if delta >= 1000:
+                    answer = (
+                        f"Te-ai mișcat mai mult în ultima săptămână: media pe 7 zile este {avg_7d:.0f} pași, peste baseline-ul de 30 de zile de {avg_30d:.0f}."
+                        if language == "ro"
+                        else f"You’ve been moving more over the last week: the 7-day average is {avg_7d:.0f} steps, above the 30-day baseline of {avg_30d:.0f}."
+                    )
+                elif delta <= -1000:
+                    answer = (
+                        f"Volumul de pași a scăzut în ultima săptămână: media pe 7 zile este {avg_7d:.0f}, sub baseline-ul de 30 de zile de {avg_30d:.0f}."
+                        if language == "ro"
+                        else f"Your step volume has dipped over the last week: the 7-day average is {avg_7d:.0f}, below the 30-day baseline of {avg_30d:.0f}."
+                    )
+            elif metric_focus["id"] == "hydration_ml":
+                answer = (
+                    f"Hidratarea medie pe 7 zile este {avg_7d:.0f} ml, față de {avg_30d:.0f} ml pe 30 de zile."
+                    if language == "ro"
+                    else f"Your 7-day average hydration is {avg_7d:.0f} ml versus {avg_30d:.0f} ml over 30 days."
+                )
+            elif metric_focus["id"] == "hrv_last_night_avg":
+                answer = (
+                    f"HRV-ul recent este {avg_7d:.1f} pe 7 zile, față de {avg_30d:.1f} pe 30 de zile."
+                    if language == "ro"
+                    else f"Your recent HRV is {avg_7d:.1f} over 7 days versus {avg_30d:.1f} over 30 days."
+                )
+
+        if current_value:
+            supporting_points.append(
+                f"{'Valoare curentă' if language == 'ro' else 'Current value'}: {current_value}."
+            )
+        if avg_7d is not None:
+            supporting_points.append(
+                f"{'Media pe 7 zile' if language == 'ro' else '7-day average'}: {avg_7d:.1f}."
+            )
+        if avg_30d is not None:
+            supporting_points.append(
+                f"{'Media pe 30 de zile' if language == 'ro' else '30-day average'}: {avg_30d:.1f}."
+            )
+        if avg_90d is not None:
+            supporting_points.append(
+                f"{'Media pe 90 de zile' if language == 'ro' else '90-day average'}: {avg_90d:.1f}."
+            )
+
+        if metric_focus["id"] == "vo2max" and _question_matches(question, "improve", "improve it", "îmbunătățesc", "imbunatatesc", "cresc", "cres"):
+            supporting_points.append(
+                "Ca să-l îmbunătățești, urmărește volum aerobic consecvent, una-două sesiuni mai intense pe săptămână și zile de recuperare suficient de bune încât să poți susține progresul."
+                if language == "ro"
+                else "To improve it, the usual levers are consistent aerobic volume, one or two harder sessions each week, and recovery that is good enough to absorb them."
+            )
+        follow_ups = (
+            [
+                "Ce alt semnal confirmă trendul ăsta?",
+                "Cum se leagă această metrică de somn și recovery?",
+            ]
+            if language == "ro"
+            else [
+                "What other Garmin signal confirms this trend?",
+                "How does this metric line up with sleep and recovery?",
+            ]
+        )
+    elif _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep", "somn", "dormit"):
         sleep_duration = _format_minutes(current.get("sleep_minutes"))
         answer = (
             "Recuperarea de peste noapte pare decentă, dar o judec în contextul somnului, stresului și energiei disponibile azi."
@@ -1941,18 +2179,7 @@ def _build_chat_answer(
     elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume", "trend", "bază", "baseline", "luni"):
         insight = trend_data.get("insights", ["Trend data is limited right now."])[0]
         answer = history_context.get("insights", [insight])[0] if history_context.get("insights") else insight
-        if language == "ro":
-            translations = {
-                "Sleep score is running above your 30-day baseline over the last 7 days.": "Scorul de somn este peste baseline-ul tău pe 30 de zile în ultimele 7 zile.",
-                "Sleep score is running below your 30-day baseline over the last 7 days.": "Scorul de somn este sub baseline-ul tău pe 30 de zile în ultimele 7 zile.",
-                "Average stress has been elevated versus your 30-day baseline.": "Stresul mediu a fost mai ridicat decât baseline-ul tău pe 30 de zile.",
-                "Average stress has been lower than your 30-day baseline.": "Stresul mediu a fost sub baseline-ul tău pe 30 de zile.",
-                "Body Battery has been stronger than usual over the last 7 days.": "Body Battery a fost mai bun decât de obicei în ultimele 7 zile.",
-                "Body Battery has been softer than your 30-day baseline lately.": "Body Battery a fost sub baseline-ul tău pe 30 de zile în ultima perioadă.",
-                "Resting heart rate is running above baseline, which can point to accumulated strain.": "Pulsul în repaus este peste baseline, ceea ce poate indica oboseală acumulată.",
-                "Resting heart rate is below baseline, which can point to fresher recovery.": "Pulsul în repaus este sub baseline, ceea ce poate indica o recuperare mai bună.",
-            }
-            answer = translations.get(answer, answer)
+        answer = _translate_history_insight(answer, language)
         for label in ("7d", "30d", "90d", "12m"):
             window = windows.get(label)
             if not window:
@@ -1995,13 +2222,120 @@ def _build_chat_answer(
                 "What changed most over the last 90 days?",
             ]
         )
+    elif _question_matches(
+        question,
+        "weight", "body fat", "body composition", "kg", "kilograms", "weigh",
+        "greutate", "kilograme", "masa", "grasime", "grăsime", "compozitie", "compoziție",
+    ):
+        weight = current_snapshot.get("weight_kg")
+        body_fat = current_snapshot.get("body_fat_pct")
+        fitness_age = current_snapshot.get("fitness_age")
+        answer = (
+            "Nu văd suficiente date recente despre compoziția corporală ca să trag o concluzie puternică."
+            if language == "ro"
+            else "I’m not seeing enough recent body-composition data to make a strong call yet."
+        )
+        if weight not in (None, ""):
+            answer = (
+                f"Ultima greutate disponibilă este {weight:.1f} kg. Mă uit la ea împreună cu body fat și fitness age, dacă există, ca să nu interpretez numărul izolat."
+                if language == "ro"
+                else f"The latest available weight is {weight:.1f} kg. I’d read that together with body fat and fitness age if they are present, rather than as an isolated number."
+            )
+        if weight not in (None, ""):
+            supporting_points.append(
+                f"{'Greutate' if language == 'ro' else 'Weight'}: {weight:.1f} kg."
+            )
+        if body_fat not in (None, "", 0):
+            supporting_points.append(
+                f"{'Body fat' if language == 'ro' else 'Body fat'}: {body_fat:.1f}%."
+            )
+        if fitness_age not in (None, "", 0):
+            supporting_points.append(
+                f"{'Fitness age' if language == 'ro' else 'Fitness age'}: {fitness_age:.1f}."
+            )
+        weight_7d = health_windows.get("7d", {}).get("weight_kg", {}).get("average")
+        weight_30d = health_windows.get("30d", {}).get("weight_kg", {}).get("average")
+        if weight_7d is not None and weight_30d is not None:
+            answer += (
+                f" Media pe 7 zile este {weight_7d} kg față de {weight_30d} kg pe 30 de zile, ceea ce îți spune dacă vorbim de un semnal stabil sau de o variație scurtă."
+                if language == "ro"
+                else f" Your 7-day average is {weight_7d} kg versus {weight_30d} kg over 30 days, which helps show whether this is stable or just short-term variation."
+            )
+        follow_ups = (
+            [
+                "Greutatea mea se mișcă real sau doar fluctuează?",
+                "Cum se leagă greutatea de somn, stres și activitate?",
+            ]
+            if language == "ro"
+            else [
+                "Is my weight actually moving or just fluctuating?",
+                "How does my weight line up with sleep, stress, and activity?",
+            ]
+        )
+    elif _metric_focus(question):
+        metric = _metric_focus(question)
+        metric_id = metric["id"]
+        history_key = metric["history"]
+        metric_label = metric["label_ro"] if language == "ro" else metric["label_en"]
+        current_value = _format_metric_response_value(metric_id, current_snapshot)
+        baseline_7d = health_windows.get("7d", {}).get(history_key, {}).get("average")
+        baseline_30d = health_windows.get("30d", {}).get(history_key, {}).get("average")
+
+        answer = (
+            f"În momentul ăsta nu văd o valoare curentă clară pentru {metric_label}, dar pot interpreta trendul imediat ce Garmin o livrează."
+            if language == "ro"
+            else f"I’m not seeing a clean current value for {metric_label} right now, but I can interpret the trend as soon as Garmin provides it."
+        )
+        if current_value:
+            answer = (
+                f"Valoarea curentă pentru {metric_label} este {current_value}."
+                if language == "ro"
+                else f"The current value for {metric_label} is {current_value}."
+            )
+            if baseline_30d not in (None, 0):
+                answer += (
+                    f" Față de media ta pe 30 de zile de {baseline_30d}, asta îmi spune dacă ești peste normă, sub normă sau aproape de obișnuit."
+                    if language == "ro"
+                    else f" Against your 30-day average of {baseline_30d}, that tells me whether you’re running above normal, below normal, or close to baseline."
+                )
+        if baseline_7d not in (None, 0):
+            supporting_points.append(
+                f"{'Media pe 7 zile' if language == 'ro' else '7-day average'}: {baseline_7d}."
+            )
+        if baseline_30d not in (None, 0):
+            supporting_points.append(
+                f"{'Media pe 30 de zile' if language == 'ro' else '30-day average'}: {baseline_30d}."
+            )
+        if baseline_7d not in (None, 0) and baseline_30d not in (None, 0):
+            delta = baseline_7d - baseline_30d
+            if abs(delta) >= 0.5:
+                supporting_points.append(
+                    (
+                        f"Trendul scurt este {'în urcare' if delta > 0 else 'în coborâre'} față de baseline."
+                        if language == "ro"
+                        else f"The short-term trend is {'rising' if delta > 0 else 'falling'} versus baseline."
+                    )
+                )
+        follow_ups = (
+            [
+                f"Cum se mișcă {metric_label} față de baseline-ul meu?",
+                f"Ce legătură are {metric_label} cu restul semnalelor mele Garmin?",
+            ]
+            if language == "ro"
+            else [
+                f"How is my {metric_label} moving versus baseline?",
+                f"How does my {metric_label} relate to the rest of my Garmin signals?",
+            ]
+        )
     else:
         answer = (
             "Iată citirea cea mai utilă pe care o pot face acum, combinând semnalele Garmin între ele, nu doar listând valori."
             if language == "ro"
             else "Here’s the most useful read I can give right now by combining your Garmin signals instead of just listing them."
         )
-        supporting_points.extend((history_context.get("insights", []) + brief["observations"])[:3])
+        localized_history = [_translate_history_insight(item, language) for item in history_context.get("insights", [])]
+        localized_observations = [_translate_observation(item, language) for item in brief["observations"]]
+        supporting_points.extend((localized_history + localized_observations)[:3])
         if recent_activities:
             supporting_points.append(
                 (
@@ -2213,8 +2547,16 @@ async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, A
 
 async def _fetch_metric_snapshot_bundle(client: GarminClient, target_date: date) -> dict[str, Any]:
     tasks = {
+        "daily_steps_today": _call_optional_client_method(client, "get_daily_steps", target_date, target_date),
         "core": _call_optional_client_method(client, "fetch_core_data", target_date=target_date),
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=target_date),
+        "training_readiness": _call_optional_client_method(client, "get_training_readiness", target_date=target_date),
+        "training_status": _call_optional_client_method(client, "get_training_status", target_date=target_date),
+        "hrv": _call_optional_client_method(client, "get_hrv_data", target_date=target_date),
+        "hydration": _call_optional_client_method(client, "get_hydration_data", target_date=target_date),
+        "fitness_age": _call_optional_client_method(client, "get_fitness_age", target_date=target_date),
+        "endurance_score": _call_optional_client_method(client, "get_endurance_score", target_date=target_date),
+        "hill_score": _call_optional_client_method(client, "get_hill_score", target_date=target_date),
     }
     names = list(tasks.keys())
     results = await asyncio.gather(*tasks.values())

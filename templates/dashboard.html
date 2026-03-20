@@ -43,11 +43,13 @@
       };
     </script>
   </head>
-  <body class="h-screen overflow-hidden bg-pitch font-sans text-ink">
+  <body class="h-[100dvh] overflow-hidden bg-pitch font-sans text-ink">
     <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,_rgba(99,168,255,0.12),_transparent_22%),linear-gradient(180deg,_#05070b,_#0a1118_55%,_#05070b)]"></div>
     <div class="absolute inset-0 -z-10 bg-[linear-gradient(rgba(99,168,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(99,168,255,0.05)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:linear-gradient(180deg,white,transparent_85%)]"></div>
 
-    <main class="mx-auto flex h-screen max-w-7xl flex-col overflow-hidden px-5 py-6 md:px-8 md:py-8">
+    <div id="mobileBackdrop" class="pointer-events-none fixed inset-0 z-30 bg-black/60 opacity-0 transition xl:hidden"></div>
+
+    <main class="mx-auto flex h-[100dvh] max-w-7xl flex-col overflow-hidden px-4 py-4 md:px-8 md:py-8">
       <header class="mb-6 flex flex-col gap-4 rounded-[1.75rem] border border-line bg-panel/90 px-5 py-4 shadow-glow backdrop-blur md:flex-row md:items-center md:justify-between">
         <div class="flex items-center gap-3">
           <img src="/logo.png" alt="CharlieChat" class="h-12 w-12 rounded-2xl border border-accent/25 bg-accent/10 object-cover p-1" />
@@ -56,7 +58,14 @@
             <h1 class="mt-1 text-2xl font-bold text-ink">CharlieChat</h1>
           </div>
         </div>
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div class="flex flex-wrap items-center gap-3">
+          <button
+            id="overviewToggle"
+            type="button"
+            class="inline-flex items-center gap-2 rounded-full border border-line bg-black/20 px-4 py-2 text-sm font-semibold text-ink transition hover:border-accent hover:text-accent xl:hidden"
+          >
+            <span>Overview</span>
+          </button>
           <div id="deviceChip" class="hidden items-center gap-3 rounded-full border border-line bg-black/20 px-4 py-2 text-sm text-muted">
             <img id="deviceChipImage" alt="" class="h-8 w-8 rounded-full object-cover" />
             <div class="flex items-center gap-2">
@@ -64,7 +73,18 @@
               <span id="deviceChipLabel"></span>
             </div>
           </div>
-          <div class="rounded-full border border-line bg-black/20 px-4 py-2 text-sm text-muted">{{ email }}</div>
+          <button
+            id="notificationToggle"
+            type="button"
+            class="relative inline-flex h-11 w-11 items-center justify-center rounded-full border border-line bg-black/20 text-ink transition hover:border-accent hover:text-accent"
+            aria-label="Notifications"
+          >
+            <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0a3 3 0 1 1-6 0m6 0H9"/>
+            </svg>
+            <span id="notificationCount" class="absolute -right-1 -top-1 hidden min-w-[1.25rem] rounded-full bg-accent px-1.5 py-0.5 text-[10px] font-bold leading-none text-black">0</span>
+          </button>
+          <div class="hidden rounded-full border border-line bg-black/20 px-4 py-2 text-sm text-muted sm:block">{{ email }}</div>
           <button
             id="logoutButton"
             type="button"
@@ -75,31 +95,37 @@
         </div>
       </header>
 
-      <section class="grid min-h-0 flex-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside class="flex min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow">
+      <section class="relative flex min-h-0 flex-1 gap-6">
+        <aside id="overviewPanel" class="fixed inset-y-0 left-0 z-40 flex w-[88vw] max-w-sm -translate-x-full flex-col overflow-hidden border-r border-line bg-panel/95 p-5 shadow-glow backdrop-blur transition-transform duration-300 xl:static xl:z-auto xl:w-[360px] xl:max-w-none xl:translate-x-0 xl:rounded-[1.75rem] xl:border xl:border-line">
           <div id="sidebarScroll" class="flex-1 space-y-4 overflow-y-auto pr-1">
-            <div class="mb-1">
-              <p class="text-xs uppercase tracking-[0.45em] text-muted">Signals</p>
-              <h2 class="mt-3 text-2xl font-bold">Garmin overview</h2>
-            </div>
-
-            <section class="rounded-[1.5rem] border border-line bg-black/20 p-4">
-              <div class="flex items-center justify-between gap-3">
-                <div>
-                  <p class="text-xs uppercase tracking-[0.35em] text-accent">Daily overview</p>
-                  <p class="mt-2 text-sm leading-6 text-muted">Dismiss what you have read. Older overviews stay in history by day.</p>
-                </div>
-              </div>
-              <div id="notificationList" class="mt-4 space-y-3"></div>
-            </section>
-
-            <section class="rounded-[1.5rem] border border-line bg-black/20 p-4">
+            <div class="mb-1 flex items-start justify-between gap-3">
               <div>
-                <p class="text-xs uppercase tracking-[0.35em] text-accent">Overview history</p>
-                <p class="mt-2 text-sm leading-6 text-muted">Saved daily insights, including dismissed notifications.</p>
+                <p class="text-xs uppercase tracking-[0.45em] text-muted">Signals</p>
+                <h2 class="mt-3 text-2xl font-bold">Garmin overview</h2>
               </div>
-              <div id="notificationHistory" class="mt-4 space-y-3"></div>
-            </section>
+              <div class="flex items-center gap-2">
+                <button
+                  id="refreshOverviewButton"
+                  type="button"
+                  class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-black/20 text-muted transition hover:border-accent hover:text-accent"
+                  aria-label="Refresh Garmin data"
+                >
+                  <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"/>
+                  </svg>
+                </button>
+                <button
+                  id="closeOverviewButton"
+                  type="button"
+                  class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-black/20 text-muted transition hover:border-accent hover:text-accent xl:hidden"
+                  aria-label="Close overview"
+                >
+                  <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="1.8">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
 
             <section class="rounded-[1.5rem] border border-line bg-black/20 p-4">
               <div>
@@ -136,7 +162,7 @@
           </p>
         </aside>
 
-        <section class="flex min-h-0 flex-col rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow md:p-6">
+        <section class="flex min-h-0 flex-1 flex-col rounded-[1.75rem] border border-line bg-panel/90 p-4 shadow-glow md:p-6">
           <div class="mb-5 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div>
               <p class="text-xs uppercase tracking-[0.45em] text-muted">Chat</p>
@@ -176,15 +202,62 @@
       </section>
     </main>
 
+    <aside id="notificationPanel" class="pointer-events-none fixed inset-y-0 right-0 z-40 flex w-[92vw] max-w-md translate-x-full flex-col border-l border-line bg-panel/95 p-5 shadow-glow backdrop-blur transition-transform duration-300">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-xs uppercase tracking-[0.35em] text-accent">Notifications</p>
+          <h2 class="mt-2 text-2xl font-bold text-ink">Daily overview</h2>
+          <p class="mt-2 text-sm leading-6 text-muted">Unread insights first, then saved history by day.</p>
+        </div>
+        <button
+          id="closeNotificationsButton"
+          type="button"
+          class="inline-flex h-10 w-10 items-center justify-center rounded-full border border-line bg-black/20 text-muted transition hover:border-accent hover:text-accent"
+          aria-label="Close notifications"
+        >
+          <svg viewBox="0 0 24 24" class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18"/>
+          </svg>
+        </button>
+      </div>
+
+      <section class="mt-6 rounded-[1.5rem] border border-line bg-black/20 p-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-xs uppercase tracking-[0.35em] text-accent">Unread</p>
+            <p class="mt-2 text-sm leading-6 text-muted">Dismiss items once you have read them.</p>
+          </div>
+        </div>
+        <div id="notificationList" class="mt-4 space-y-3"></div>
+      </section>
+
+      <section class="mt-4 flex min-h-0 flex-1 flex-col rounded-[1.5rem] border border-line bg-black/20 p-4">
+        <div>
+          <p class="text-xs uppercase tracking-[0.35em] text-accent">History</p>
+          <p class="mt-2 text-sm leading-6 text-muted">Saved daily insights, including dismissed notifications.</p>
+        </div>
+        <div id="notificationHistory" class="mt-4 flex-1 space-y-3 overflow-y-auto pr-1"></div>
+      </section>
+    </aside>
+
     <script>
       const messageBox = document.getElementById("messageBox");
       const warningBox = document.getElementById("warningBox");
+      const mobileBackdrop = document.getElementById("mobileBackdrop");
+      const overviewPanel = document.getElementById("overviewPanel");
+      const notificationPanel = document.getElementById("notificationPanel");
+      const overviewToggle = document.getElementById("overviewToggle");
+      const closeOverviewButton = document.getElementById("closeOverviewButton");
+      const notificationToggle = document.getElementById("notificationToggle");
+      const closeNotificationsButton = document.getElementById("closeNotificationsButton");
+      const notificationCount = document.getElementById("notificationCount");
       const notificationList = document.getElementById("notificationList");
       const notificationHistory = document.getElementById("notificationHistory");
       const shortcutList = document.getElementById("shortcutList");
       const metricList = document.getElementById("metricList");
       const historyMeta = document.getElementById("historyMeta");
       const syncHistoryButton = document.getElementById("syncHistoryButton");
+      const refreshOverviewButton = document.getElementById("refreshOverviewButton");
       const deviceChip = document.getElementById("deviceChip");
       const deviceChipImage = document.getElementById("deviceChipImage");
       const deviceChipDot = document.getElementById("deviceChipDot");
@@ -246,6 +319,38 @@
         });
       }
 
+      function setMobileBackdrop(visible) {
+        mobileBackdrop.classList.toggle("pointer-events-none", !visible);
+        mobileBackdrop.classList.toggle("opacity-0", !visible);
+        mobileBackdrop.classList.toggle("opacity-100", visible);
+      }
+
+      function openOverviewPanel() {
+        closeNotificationPanel();
+        overviewPanel.classList.remove("-translate-x-full");
+        setMobileBackdrop(true);
+      }
+
+      function closeOverviewPanel() {
+        overviewPanel.classList.add("-translate-x-full");
+        if (notificationPanel.classList.contains("translate-x-full")) {
+          setMobileBackdrop(false);
+        }
+      }
+
+      function openNotificationPanel() {
+        closeOverviewPanel();
+        notificationPanel.classList.remove("translate-x-full", "pointer-events-none");
+        setMobileBackdrop(true);
+      }
+
+      function closeNotificationPanel() {
+        notificationPanel.classList.add("translate-x-full", "pointer-events-none");
+        if (overviewPanel.classList.contains("-translate-x-full")) {
+          setMobileBackdrop(false);
+        }
+      }
+
       function appendChatBubble(role, content, supportingPoints = [], followUps = []) {
         const wrapper = document.createElement("div");
         wrapper.className = role === "user" ? "flex justify-end" : "flex justify-start";
@@ -299,6 +404,9 @@
       function renderNotifications(notifications = { active: [], history: [] }) {
         notificationList.innerHTML = "";
         notificationHistory.innerHTML = "";
+        const unreadCount = notifications.active.length;
+        notificationCount.textContent = String(unreadCount);
+        notificationCount.classList.toggle("hidden", unreadCount === 0);
 
         if (!notifications.active.length) {
           notificationList.innerHTML = `<div class="rounded-[1.25rem] border border-line bg-black/20 px-4 py-3 text-sm text-muted">No unread overview notifications right now.</div>`;
@@ -405,7 +513,7 @@
         deviceChipDot.className = `h-2.5 w-2.5 rounded-full ${dotClass}`;
         deviceChipLabel.textContent = device.battery_percent != null
           ? `${device.name || "Device"} ${device.battery_percent}%`
-          : `${device.name || "Current device"} battery unavailable`;
+          : `${device.name || "Current device"} battery not exposed by Garmin`;
         deviceChip.classList.remove("hidden");
         deviceChip.classList.add("flex");
       }
@@ -509,6 +617,15 @@
         chatForm.requestSubmit();
       });
 
+      overviewToggle.addEventListener("click", openOverviewPanel);
+      closeOverviewButton.addEventListener("click", closeOverviewPanel);
+      notificationToggle.addEventListener("click", openNotificationPanel);
+      closeNotificationsButton.addEventListener("click", closeNotificationPanel);
+      mobileBackdrop.addEventListener("click", () => {
+        closeOverviewPanel();
+        closeNotificationPanel();
+      });
+
       notificationList.addEventListener("click", async (event) => {
         const button = event.target.closest("[data-dismiss-id]");
         if (!button) {
@@ -548,6 +665,18 @@
           setMessage(error.message, "error");
         } finally {
           syncHistoryButton.disabled = false;
+        }
+      });
+
+      refreshOverviewButton.addEventListener("click", async () => {
+        refreshOverviewButton.disabled = true;
+        try {
+          await loadShortcuts();
+          setMessage("Current Garmin data refreshed.", "success");
+        } catch (error) {
+          setMessage(error.message, "error");
+        } finally {
+          refreshOverviewButton.disabled = false;
         }
       });
 
