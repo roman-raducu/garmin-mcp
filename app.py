@@ -1999,6 +1999,80 @@ def _question_language(question: str) -> str:
     return "ro" if any(marker in lowered for marker in romanian_markers) else "en"
 
 
+def _format_display_date(value: date | str | None, language: str) -> str | None:
+    parsed = _coerce_date(value)
+    if parsed is None:
+        return None
+    if language == "ro":
+        return parsed.strftime("%d-%m-%Y")
+    return parsed.strftime("%Y-%m-%d")
+
+
+def _question_extrema_mode(question: str) -> str | None:
+    lowered = question.lower()
+    min_keywords = ("cea mai mică", "cea mai mica", "minim", "minimum", "lowest", "lowest value", "smallest", "min ")
+    max_keywords = ("cea mai mare", "maxim", "maximum", "highest", "highest value", "largest", "max ")
+    if any(keyword in lowered for keyword in min_keywords):
+        return "min"
+    if any(keyword in lowered for keyword in max_keywords):
+        return "max"
+    return None
+
+
+def _question_history_window(question: str, today: date) -> tuple[str, str, date, date]:
+    language = _question_language(question)
+    lowered = question.lower()
+    catalog = [
+        ("7d", "ultimele 7 zile", "last 7 days", ("ultimele 7 zile", "ultimele sapte zile", "last 7 days", "past 7 days", "7 zile", "7 days", "7d")),
+        ("30d", "ultimele 30 de zile", "last 30 days", ("ultimele 30 de zile", "last 30 days", "past 30 days", "30 zile", "30 days", "30d")),
+        ("90d", "ultimele 90 de zile", "last 90 days", ("ultimele 90 de zile", "last 90 days", "past 90 days", "90 zile", "90 days", "90d")),
+        ("3m", "ultimele 3 luni", "last 3 months", ("ultimele 3 luni", "last 3 months", "past 3 months", "3 luni", "3 months", "3m")),
+        ("6m", "ultimele 6 luni", "last 6 months", ("ultimele 6 luni", "last 6 months", "past 6 months", "6 luni", "6 months", "6m")),
+        ("9m", "ultimele 9 luni", "last 9 months", ("ultimele 9 luni", "last 9 months", "past 9 months", "9 luni", "9 months", "9m")),
+        ("12m", "ultimul an", "last 12 months", ("ultimul an", "anul trecut", "ultimele 12 luni", "12 luni", "last year", "past year", "last 12 months", "12 months", "12m")),
+    ]
+    for label, ro_title, en_title, keywords in catalog:
+        if any(keyword in lowered for keyword in keywords):
+            days = next((days for key, _, days, _ in TREND_WINDOWS if key == label), None)
+            months = next((months for key, _, _, months in TREND_WINDOWS if key == label), None)
+            return label, ro_title if language == "ro" else en_title, _window_start(today, days=days, months=months), today
+    return "30d", ("ultimele 30 de zile" if language == "ro" else "last 30 days"), _window_start(today, days=30), today
+
+
+def _historical_metric_extreme(
+    email: str | None,
+    metric_key: str,
+    start_date: date,
+    end_date: date,
+    mode: str,
+) -> dict[str, Any] | None:
+    if not email:
+        return None
+
+    snapshots = _load_metric_snapshots(email, start_date, end_date)
+    candidates: list[tuple[date, float]] = []
+    for snapshot in snapshots:
+        snapshot_date = _coerce_date(snapshot.get("calendar_date"))
+        metric_value = _sanitize_metric_value(metric_key, snapshot.get(metric_key))
+        if snapshot_date is None or metric_value in (None, ""):
+            continue
+        try:
+            numeric_value = float(metric_value)
+        except (TypeError, ValueError):
+            continue
+        candidates.append((snapshot_date, numeric_value))
+
+    if not candidates:
+        return None
+
+    selected = min(candidates, key=lambda item: item[1]) if mode == "min" else max(candidates, key=lambda item: item[1])
+    return {
+        "date": selected[0],
+        "value": round(selected[1], 1),
+        "samples": len(candidates),
+    }
+
+
 def _localized_suggested_questions(language: str) -> list[str]:
     if language == "ro":
         return [
@@ -2065,7 +2139,7 @@ def _metric_focus(question: str) -> dict[str, Any] | None:
         {"id": "active_kcal", "history": "active_kcal", "keywords": ("calories", "kcal", "calorii"), "label_en": "active calories", "label_ro": "caloriile active"},
         {"id": "steps", "history": "steps", "keywords": ("steps", "pași", "pasi"), "label_en": "steps", "label_ro": "pașii"},
         {"id": "stress_avg", "history": "stress", "keywords": ("stress", "stres"), "label_en": "stress", "label_ro": "stresul"},
-        {"id": "resting_hr", "history": "resting_hr", "keywords": ("resting heart", "rhr", "puls", "heart rate"), "label_en": "resting heart rate", "label_ro": "pulsul în repaus"},
+        {"id": "resting_hr", "history": "resting_hr", "keywords": ("resting heart", "resting heart rate", "resting hr", "resting pulse", "rhr", "puls în repaus", "puls in repaus", "ritm cardiac în repaus", "ritm cardiac in repaus"), "label_en": "resting heart rate", "label_ro": "pulsul în repaus"},
         {"id": "sleep_score", "history": "sleep_score", "keywords": ("sleep score", "scor somn"), "label_en": "sleep score", "label_ro": "scorul de somn"},
         {"id": "body_battery_current", "history": "body_battery", "keywords": ("body battery",), "label_en": "Body Battery", "label_ro": "Body Battery"},
     ]
@@ -2136,6 +2210,7 @@ def _build_chat_answer(
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
     history_context: dict[str, Any] | None = None,
+    email: str | None = None,
 ) -> dict[str, Any]:
     history_context = history_context or {"windows": {}, "insights": [], "days_available": 0}
     brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
@@ -2154,8 +2229,69 @@ def _build_chat_answer(
     supporting_points: list[str] = []
     follow_ups = _localized_suggested_questions(language)[:3]
     metric_focus = _metric_focus(question)
+    extrema_mode = _question_extrema_mode(question)
 
-    if metric_focus and metric_focus["id"] in {"vo2max", "stress_avg", "steps", "hydration_ml", "hrv_last_night_avg"}:
+    if metric_focus and extrema_mode:
+        _, window_title, window_start, window_end = _question_history_window(question, date.today())
+        extreme = _historical_metric_extreme(email, metric_focus["history"], window_start, window_end, extrema_mode)
+        label = metric_focus["label_ro"] if language == "ro" else metric_focus["label_en"]
+        current_value = _format_metric_response_value(metric_focus["id"], current_snapshot)
+        baseline_30d = _history_average(history_context, "30d", metric_focus["history"])
+
+        if extreme:
+            rendered_extreme = _format_metric_response_value(metric_focus["id"], {metric_focus["id"]: extreme["value"]}) or str(extreme["value"])
+            rendered_date = _format_display_date(extreme["date"], language) or str(extreme["date"])
+            if extrema_mode == "min":
+                answer = (
+                    f"Cea mai mică valoare pentru {label} din {window_title} este {rendered_extreme}, înregistrată pe {rendered_date}."
+                    if language == "ro"
+                    else f"The lowest {label} over the {window_title} is {rendered_extreme}, recorded on {rendered_date}."
+                )
+            else:
+                answer = (
+                    f"Cea mai mare valoare pentru {label} din {window_title} este {rendered_extreme}, înregistrată pe {rendered_date}."
+                    if language == "ro"
+                    else f"The highest {label} over the {window_title} is {rendered_extreme}, recorded on {rendered_date}."
+                )
+
+            if metric_focus["id"] == "resting_hr":
+                answer += (
+                    " Pentru pulsul în repaus, asta e util mai ales ca punct de comparație cu baseline-ul tău, nu ca o țintă care trebuie urmărită artificial în fiecare zi."
+                    if language == "ro"
+                    else " For resting heart rate, that matters mainly as a comparison point against your baseline, not as a number you should try to force every day."
+                )
+
+            if current_value:
+                supporting_points.append(
+                    f"{'Astăzi' if language == 'ro' else 'Today'}: {current_value}."
+                )
+            if baseline_30d not in (None, 0):
+                supporting_points.append(
+                    (
+                        f"Baseline 30 zile: {baseline_30d:.1f}."
+                        if language == "ro"
+                        else f"30-day baseline: {baseline_30d:.1f}."
+                    )
+                )
+            follow_ups = (
+                [
+                    f"Cum a evoluat {label} în ultimele 30 și 90 de zile?",
+                    f"În ce perioade a fost {label} clar peste sau sub normal?",
+                ]
+                if language == "ro"
+                else [
+                    f"How has my {label} moved across the last 30 and 90 days?",
+                    f"Which periods pushed my {label} clearly above or below normal?",
+                ]
+            )
+        else:
+            answer = (
+                f"Nu am încă destule snapshot-uri salvate ca să calculez credibil extrema pentru {label} din {window_title}."
+                if language == "ro"
+                else f"I don’t yet have enough saved snapshots to compute a credible extreme for {label} over the {window_title}."
+            )
+
+    elif metric_focus and metric_focus["id"] in {"vo2max", "stress_avg", "steps", "hydration_ml", "hrv_last_night_avg"}:
         current_value = _format_metric_response_value(metric_focus["id"], current_snapshot)
         avg_7d = _history_average(history_context, "7d", metric_focus["history"])
         avg_30d = _history_average(history_context, "30d", metric_focus["history"])
@@ -2513,8 +2649,8 @@ def _build_chat_answer(
                 "How does my weight line up with sleep, stress, and activity?",
             ]
         )
-    elif _metric_focus(question):
-        metric = _metric_focus(question)
+    elif metric_focus:
+        metric = metric_focus
         metric_id = metric["id"]
         history_key = metric["history"]
         metric_label = metric["label_ro"] if language == "ro" else metric["label_en"]
@@ -3346,6 +3482,7 @@ async def chat(request_payload: GarminChatRequest, request: Request):
             full_context_data,
             trend_data,
             history_context=history_context,
+            email=stored_tokens.email if stored_tokens else None,
         )
         llm_answer = None
         llm_mode = "heuristic"

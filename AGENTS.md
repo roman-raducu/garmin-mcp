@@ -134,6 +134,9 @@ Requirements:
 - interpret signals in natural language
 - combine current state + historical baseline + trend context
 - be able to answer about all Garmin metrics that the app tracks
+- when the user asks about a specific metric, answer that metric first and directly
+- do not drift into Body Battery or generic recovery framing unless it is explicitly asked for or clearly needed as short supporting context
+- questions about minima / maxima / `cea mai mică` / `cea mai mare` must return the actual saved historical value and date when available
 
 Chat UI requirements:
 - viewport-sized layout
