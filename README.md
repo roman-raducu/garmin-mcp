@@ -7,7 +7,7 @@ Successful Garmin browser sessions are stored in a small SQLite database.
 - Default path: `/tmp/garmin_state.db`
 - Override with `GARMIN_STATE_DB_PATH`
 
-If you want sessions to survive Render restarts or deploys, point `GARMIN_STATE_DB_PATH` at a persistent disk mount instead of `/tmp`.
+If you want sessions to survive restarts or deploys, point `GARMIN_STATE_DB_PATH` at a persistent disk mount instead of `/tmp`.
 
 ## VPS deploy
 
@@ -102,6 +102,17 @@ curl -I http://127.0.0.1:8000/healthz
 curl -I https://garmin.raducu.co/healthz
 sudo journalctl -u garmin-mcp -n 100 --no-pager
 ```
+
+## SSH troubleshooting
+
+If SSH to the VPS times out from the outside, check these first:
+
+- the VPS is powered on
+- the provider firewall or security group allows inbound `TCP 22`
+- `sshd` is running: `systemctl status ssh` or `systemctl status sshd`
+- root login is allowed if you plan to use `root`
+- the IP address is correct
+- the SSH port is really `22`
 
 ## Notes
 
