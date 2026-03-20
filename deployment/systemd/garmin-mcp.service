@@ -1,0 +1,20 @@
+[Unit]
+Description=Garmin MCP FastAPI app
+After=network.target
+
+[Service]
+Type=simple
+User=garmin
+Group=www-data
+WorkingDirectory=/opt/garmin-mcp
+EnvironmentFile=/etc/garmin-mcp.env
+ExecStart=/opt/garmin-mcp/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips="*"
+Restart=always
+RestartSec=5
+
+# Tighten file permissions for runtime data and logs.
+UMask=027
+
+[Install]
+WantedBy=multi-user.target
+
