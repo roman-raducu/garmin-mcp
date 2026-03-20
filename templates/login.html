@@ -37,40 +37,37 @@
       };
     </script>
   </head>
-  <body class="min-h-screen bg-pitch font-sans text-ink">
+  <body class="min-h-[100dvh] bg-pitch font-sans text-ink">
     <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top,_rgba(99,168,255,0.18),_transparent_28%),linear-gradient(180deg,_#05070b,_#0a1118_55%,_#05070b)]"></div>
     <div class="absolute inset-0 -z-10 bg-[linear-gradient(rgba(99,168,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(99,168,255,0.05)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:linear-gradient(180deg,white,transparent_80%)]"></div>
 
-    <main class="mx-auto flex min-h-screen max-w-6xl items-center justify-center px-5 py-8">
+    <main class="mx-auto flex min-h-[100dvh] max-w-6xl items-center justify-center px-5 py-4 sm:py-6 lg:py-8">
       <section class="grid w-full max-w-5xl overflow-hidden rounded-[2rem] border border-line bg-panel/90 shadow-glow backdrop-blur lg:grid-cols-[0.95fr_1.05fr]">
-        <div class="hidden border-r border-line bg-[linear-gradient(180deg,rgba(99,168,255,0.10),rgba(99,168,255,0.02))] p-10 lg:flex lg:flex-col lg:justify-between">
+        <div class="hidden border-r border-line bg-[linear-gradient(180deg,rgba(99,168,255,0.10),rgba(99,168,255,0.02))] p-10 lg:flex lg:flex-col lg:justify-center">
           <div>
             <img src="/logo.png" alt="CharlieChat" class="mb-8 h-24 w-24 object-contain" />
             <p class="text-xs uppercase tracking-[0.45em] text-muted">CharlieChat</p>
-            <h1 class="mt-5 max-w-sm text-5xl font-bold leading-tight text-ink">
-              Your Garmin, in plain language.
+            <h1 class="mt-5 max-w-md text-[2.8rem] font-bold leading-[1.05] text-ink">
+              Your Garmin data, in plain language.
             </h1>
             <p class="mt-5 max-w-md text-base leading-7 text-muted">
               Sign in once, complete MFA if Garmin asks, then use CharlieChat to turn your Garmin data into clear answers.
             </p>
           </div>
-          <div class="rounded-2xl border border-accent/10 bg-black/20 px-5 py-4 text-sm leading-7 text-muted">
-            Sleep, recovery, training, trends, and the rest of your Garmin data, all in one place.
-          </div>
         </div>
 
         <div class="p-6 sm:p-8 lg:p-10">
           <div class="mx-auto w-full max-w-md">
-            <div class="mb-8 lg:hidden">
-              <img src="/logo.png" alt="CharlieChat" class="mb-5 h-24 w-24 object-contain" />
+            <div class="mb-6 text-center lg:hidden">
+              <img src="/logo.png" alt="CharlieChat" class="mx-auto mb-5 h-24 w-24 object-contain" />
               <p class="text-xs uppercase tracking-[0.45em] text-muted">CharlieChat</p>
               <h1 class="mt-4 text-4xl font-bold leading-tight">Sign in</h1>
-              <p class="mt-4 max-w-sm text-sm leading-6 text-muted">
+              <p class="mx-auto mt-4 max-w-sm text-sm leading-6 text-muted">
                 Connect Garmin, finish MFA if needed, then use CharlieChat to understand your health and training data.
               </p>
             </div>
 
-            <div class="mb-8 hidden lg:block">
+            <div class="mb-6 hidden lg:block">
               <p class="text-xs uppercase tracking-[0.45em] text-muted">Secure Session</p>
               <h2 class="mt-4 text-4xl font-bold leading-tight">Connect your Garmin account</h2>
             </div>
