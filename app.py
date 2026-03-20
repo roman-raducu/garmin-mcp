@@ -108,12 +108,21 @@ def _ensure_browser_session_id(request: Request) -> tuple[str, bool]:
     return secrets.token_urlsafe(24), True
 
 
-def _set_browser_cookie(response: Response, browser_session_id: str) -> None:
+def _cookie_secure(request: Request) -> bool:
+    configured = os.getenv("GARMIN_COOKIE_SECURE", "auto").strip().lower()
+    if configured in {"1", "true", "yes", "on"}:
+        return True
+    if configured in {"0", "false", "no", "off"}:
+        return False
+    return request.url.scheme == "https"
+
+
+def _set_browser_cookie(request: Request, response: Response, browser_session_id: str) -> None:
     response.set_cookie(
         key=COOKIE_NAME,
         value=browser_session_id,
         httponly=True,
-        secure=True,
+        secure=_cookie_secure(request),
         samesite="lax",
         max_age=60 * 60 * 24 * 30,
     )
@@ -898,7 +907,7 @@ async def index(request: Request):
         context={},
     )
     if needs_cookie:
-        _set_browser_cookie(response, browser_session_id)
+        _set_browser_cookie(request, response, browser_session_id)
     return response
 
 
@@ -985,7 +994,7 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
                 },
             )
             if needs_cookie:
-                _set_browser_cookie(response, browser_session_id)
+                _set_browser_cookie(request, response, browser_session_id)
             return response
 
         oauth1_token, oauth2_token = _extract_garth_tokens(login_result)
@@ -1000,7 +1009,7 @@ async def connect_garmin(payload: GarminLoginRequest, request: Request):
         )
         response = JSONResponse({"status": "connected", "email": payload.email})
         if needs_cookie:
-            _set_browser_cookie(response, browser_session_id)
+            _set_browser_cookie(request, response, browser_session_id)
         return response
     except Exception as exc:
         response = getattr(exc, "response", None)
@@ -1069,7 +1078,7 @@ async def complete_garmin_mfa(payload: GarminMfaRequest, request: Request):
         await _close_pending_auth(payload.pending_id)
         response = JSONResponse({"status": "connected", "email": pending.email})
         if needs_cookie:
-            _set_browser_cookie(response, browser_session_id)
+            _set_browser_cookie(request, response, browser_session_id)
         return response
     except HTTPException:
         raise
