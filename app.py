@@ -1196,6 +1196,21 @@ def _load_metric_snapshots(email: str, start_date: date, end_date: date) -> list
     return [json.loads(row[0]) for row in rows]
 
 
+def _series_from_snapshots(snapshots: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    series: list[dict[str, Any]] = []
+    for snapshot in snapshots:
+        value = snapshot.get(key)
+        if value in (None, ""):
+            continue
+        series.append(
+            {
+                "date": snapshot.get("calendar_date"),
+                "value": value,
+            }
+        )
+    return series
+
+
 def _summarize_snapshot_metric(snapshots: list[dict[str, Any]], key: str) -> dict[str, Any]:
     series = [snapshot[key] for snapshot in snapshots if snapshot.get(key) not in (None, "")]
     if not series:
@@ -1559,6 +1574,52 @@ def _load_daily_notifications(email: str, limit: int = 20) -> dict[str, Any]:
     }
 
 
+def _build_analytics_payload(email: str | None, today: date) -> dict[str, Any]:
+    if not email:
+        return {
+            "available": False,
+            "coverage_start": None,
+            "latest_date": None,
+            "days_available": 0,
+            "windows": {},
+            "insights": [],
+            "series": {},
+        }
+
+    oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
+    snapshots = _load_metric_snapshots(email, oldest_start, today)
+    history_context = _build_history_context(email, today)
+    metric_keys = (
+        "steps",
+        "active_kcal",
+        "sleep_score",
+        "sleep_minutes",
+        "body_battery_current",
+        "stress_avg",
+        "resting_hr",
+        "training_readiness",
+        "vo2max",
+        "hrv_last_night_avg",
+        "hydration_ml",
+        "weight_kg",
+        "body_fat_pct",
+        "fitness_age",
+        "endurance_score",
+        "hill_score",
+        "spo2_average",
+        "intensity_minutes",
+    )
+    return {
+        "available": bool(snapshots),
+        "coverage_start": snapshots[0]["calendar_date"] if snapshots else None,
+        "latest_date": snapshots[-1]["calendar_date"] if snapshots else None,
+        "days_available": len(snapshots),
+        "windows": history_context.get("windows", {}),
+        "insights": history_context.get("insights", []),
+        "series": {key: _series_from_snapshots(snapshots, key) for key in metric_keys},
+    }
+
+
 def _current_metric_rows(bundle: dict[str, Any]) -> list[dict[str, str]]:
     snapshot = _build_daily_snapshot(bundle, date.today())
     rows: list[tuple[str, str | None]] = [
@@ -1901,6 +1962,14 @@ def _format_metric_response_value(metric_id: str, snapshot: dict[str, Any]) -> s
     if metric_id == "sleep_minutes":
         return _format_minutes(value)
     return str(value)
+
+
+def _history_average(history_context: dict[str, Any], label: str, metric_key: str) -> float | None:
+    window = history_context.get("windows", {}).get(label, {})
+    metric = window.get(metric_key, {})
+    if isinstance(metric, dict):
+        return metric.get("average")
+    return None
 
 
 def _should_try_ollama(question: str) -> bool:
@@ -2968,6 +3037,18 @@ async def sync_history(payload: GarminHistorySyncRequest, request: Request):
         }
 
     return await _with_client(perform_sync, request=request)
+
+
+@app.get("/api/analytics")
+async def analytics(request: Request):
+    stored_tokens = _stored_tokens_for_request(request)
+    if stored_tokens is None:
+        raise HTTPException(status_code=401, detail="Connect Garmin before opening analytics.")
+
+    return {
+        "as_of": date.today().isoformat(),
+        "analytics": _build_analytics_payload(stored_tokens.email, date.today()),
+    }
 
 
 @app.post("/api/connect")
