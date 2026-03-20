@@ -86,6 +86,9 @@ TREND_WINDOWS: tuple[tuple[str, str, int | None, int | None], ...] = (
     ("12m", "Last 12 months", None, 12),
 )
 ZERO_IS_MISSING_METRICS = {
+    "sleep_score",
+    "sleep_minutes",
+    "resting_hr",
     "training_readiness",
     "acute_load_ratio",
     "vo2max",
@@ -98,6 +101,36 @@ ZERO_IS_MISSING_METRICS = {
     "hill_score",
     "spo2_average",
     "spo2_latest",
+}
+METRIC_SANITY_RANGES: dict[str, tuple[float | None, float | None]] = {
+    "steps": (0, 100000),
+    "step_goal": (1000, 100000),
+    "distance_m": (0, 200000),
+    "active_kcal": (0, 10000),
+    "resting_hr": (25, 220),
+    "sleep_score": (1, 100),
+    "sleep_minutes": (1, 24 * 60),
+    "body_battery_current": (0, 100),
+    "body_battery_at_wake": (0, 100),
+    "body_battery_high": (0, 100),
+    "body_battery_low": (0, 100),
+    "stress_avg": (0, 100),
+    "stress_max": (0, 100),
+    "intensity_minutes": (0, 2000),
+    "spo2_latest": (60, 100),
+    "spo2_average": (60, 100),
+    "training_readiness": (1, 100),
+    "acute_load_ratio": (0.05, 10),
+    "vo2max": (10, 100),
+    "hrv_last_night_avg": (5, 300),
+    "hrv_weekly_avg": (5, 300),
+    "hydration_ml": (0, 10000),
+    "hydration_goal_ml": (0, 10000),
+    "weight_kg": (20, 400),
+    "body_fat_pct": (1, 75),
+    "fitness_age": (10, 120),
+    "endurance_score": (1, 10000),
+    "hill_score": (1, 100),
 }
 
 
@@ -636,18 +669,32 @@ def _coerce_optional_int(value: Any) -> int | None:
         return None
 
 
+def _sanitize_metric_value(key: str, value: Any) -> Any:
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        numeric_value = float(value)
+        if key in ZERO_IS_MISSING_METRICS and numeric_value == 0:
+            return None
+        metric_range = METRIC_SANITY_RANGES.get(key)
+        if metric_range is not None:
+            lower, upper = metric_range
+            if lower is not None and numeric_value < lower:
+                return None
+            if upper is not None and numeric_value > upper:
+                return None
+        if isinstance(value, int):
+            return int(numeric_value)
+        return numeric_value
+    return value
+
+
 def _sanitize_metric_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     sanitized = dict(snapshot)
-    for key in ZERO_IS_MISSING_METRICS:
-        value = sanitized.get(key)
-        if value in (None, "", [], {}):
-            continue
-        try:
-            numeric_value = float(value)
-        except (TypeError, ValueError):
-            continue
-        if numeric_value == 0:
-            sanitized[key] = None
+    for key, value in list(sanitized.items()):
+        sanitized[key] = _sanitize_metric_value(key, value)
     return sanitized
 
 
@@ -1008,7 +1055,7 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
         summary_data.get("bodyBatteryChargedValue") if isinstance(summary_data, dict) else None,
     )
 
-    return {
+    return _sanitize_metric_snapshot({
         "calendar_date": snapshot_date.isoformat(),
         "steps": _coerce_int(_first_present(
             _deep_find_first(daily_steps_today, {"totalSteps"}),
@@ -1140,7 +1187,7 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
             summary_data.get("lastSyncTimestampGMT") if isinstance(summary_data, dict) else None,
             summary_data.get("lastSyncTimestampLocal") if isinstance(summary_data, dict) else None,
         ),
-    }
+    })
 
 
 def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -1267,7 +1314,7 @@ def _load_metric_snapshots(email: str, start_date: date, end_date: date) -> list
 def _series_from_snapshots(snapshots: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
     series: list[dict[str, Any]] = []
     for snapshot in snapshots:
-        value = snapshot.get(key)
+        value = _sanitize_metric_value(key, snapshot.get(key))
         if value in (None, ""):
             continue
         series.append(
@@ -1280,7 +1327,11 @@ def _series_from_snapshots(snapshots: list[dict[str, Any]], key: str) -> list[di
 
 
 def _summarize_snapshot_metric(snapshots: list[dict[str, Any]], key: str) -> dict[str, Any]:
-    series = [snapshot[key] for snapshot in snapshots if snapshot.get(key) not in (None, "")]
+    series = [
+        value
+        for snapshot in snapshots
+        if (value := _sanitize_metric_value(key, snapshot.get(key))) not in (None, "")
+    ]
     if not series:
         return {"count": 0, "latest": None, "average": None, "min": None, "max": None}
 
@@ -2053,7 +2104,8 @@ def _history_average(history_context: dict[str, Any], label: str, metric_key: st
     window = history_context.get("windows", {}).get(label, {})
     metric = window.get(metric_key, {})
     if isinstance(metric, dict):
-        return metric.get("average")
+        average = _sanitize_metric_value(metric_key, metric.get("average"))
+        return float(average) if average not in (None, "") else None
     return None
 
 
