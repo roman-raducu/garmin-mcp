@@ -63,6 +63,11 @@ class GarminChatRequest(BaseModel):
     question: str
 
 
+class GarminHistorySyncRequest(BaseModel):
+    days: int = 45
+    offset_days: int = 0
+
+
 TOKEN_STORE: dict[str, StoredTokens] = {}
 PENDING_AUTHS: dict[str, PendingAuth] = {}
 GARTH_AUTH_LOCK = asyncio.Lock()
@@ -93,6 +98,17 @@ def _init_token_db() -> None:
                     oauth1_token_json TEXT NOT NULL,
                     oauth2_token_json TEXT NOT NULL,
                     connected_at REAL NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS metric_snapshots (
+                    email TEXT NOT NULL,
+                    calendar_date TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL,
+                    PRIMARY KEY(email, calendar_date)
                 )
                 """
             )
@@ -568,6 +584,31 @@ def _format_km(value: Any) -> str | None:
     return f"{km:.1f} km"
 
 
+def _format_ml(value: Any) -> str | None:
+    ml = _coerce_int(value)
+    if ml <= 0:
+        return None
+    if ml >= 1000:
+        return f"{ml / 1000:.1f} L"
+    return f"{ml} ml"
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _humanize_token(value: Any) -> str | None:
+    if value in (None, "", [], {}):
+        return None
+    text = str(value).replace("_", " ").strip()
+    if not text:
+        return None
+    return text.title()
+
+
 def _extract_activity_type(activity: dict[str, Any]) -> str:
     activity_type = activity.get("activityType")
     if isinstance(activity_type, dict):
@@ -788,7 +829,28 @@ def _source_inventory(bundle: dict[str, Any]) -> dict[str, list[str]]:
     }
 
 
-def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
+def _training_status_payload_map(training_status_data: Any, *keys: str) -> dict[str, Any] | None:
+    if not isinstance(training_status_data, dict):
+        return None
+
+    current: Any = training_status_data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key, {})
+
+    if not isinstance(current, dict):
+        return None
+
+    candidates = [value for value in current.values() if isinstance(value, dict)]
+    if not candidates:
+        return None
+
+    primary = next((value for value in candidates if value.get("primaryTrainingDevice")), None)
+    return primary or candidates[0]
+
+
+def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[str, Any]:
     summary_data = _source_payload(bundle, "summary")
     core_data = _source_payload(bundle, "core")
     body_data = _source_payload(bundle, "body")
@@ -800,33 +862,355 @@ def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
     fitness_age_data = _source_payload(bundle, "fitness_age")
     endurance_score_data = _source_payload(bundle, "endurance_score")
     hill_score_data = _source_payload(bundle, "hill_score")
+    training_status_payload = _training_status_payload_map(
+        training_status_data,
+        "mostRecentTrainingStatus",
+        "latestTrainingStatusData",
+    )
+    training_balance_payload = _training_status_payload_map(
+        training_status_data,
+        "mostRecentTrainingLoadBalance",
+        "metricsTrainingLoadBalanceDTOMap",
+    )
+    hrv_summary = hrv_data.get("hrvSummary", {}) if isinstance(hrv_data, dict) else {}
+
+    sleep_seconds = _first_present(
+        core_data.get("sleepTimeSeconds") if isinstance(core_data, dict) else None,
+        summary_data.get("sleepingSeconds") if isinstance(summary_data, dict) else None,
+    )
+    sleep_minutes = round(_coerce_float(sleep_seconds) / 60, 1) if sleep_seconds not in (None, "", [], {}) else None
+    body_battery_current = _first_present(
+        core_data.get("bodyBatteryMostRecentValue") if isinstance(core_data, dict) else None,
+        summary_data.get("bodyBatteryMostRecentValue") if isinstance(summary_data, dict) else None,
+        core_data.get("bodyBatteryAtWakeTime") if isinstance(core_data, dict) else None,
+        summary_data.get("bodyBatteryAtWakeTime") if isinstance(summary_data, dict) else None,
+        core_data.get("bodyBatteryChargedValue") if isinstance(core_data, dict) else None,
+        summary_data.get("bodyBatteryChargedValue") if isinstance(summary_data, dict) else None,
+    )
 
     return {
-        "steps_today": _deep_find_first(summary_data, {"totalSteps"}) or _deep_find_first(core_data, {"steps", "dailySteps"}),
-        "body_battery": _deep_find_first(core_data, {"bodyBattery", "bodyBatteryLevel", "bodyBatteryChargedValue"}),
-        "stress_level": _deep_find_first(core_data, {"stressLevel", "stressQualifierText", "overallStressLevel", "allDayStress", "stressDescription"}),
-        "resting_heart_rate": _deep_find_first(summary_data, {"restingHeartRate"}) or _deep_find_first(core_data, {"restingHR", "restingHeartRateValue"}),
-        "sleep_score": _deep_find_first(core_data, {"sleepScore", "overallSleepScore"}),
-        "sleep_minutes": _deep_find_first(core_data, {"sleepTimeMinutes", "sleepMinutes"}),
-        "training_readiness": _deep_find_first(training_readiness_data or training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
-        "training_status": _deep_find_first(training_status_data or training_data, {"trainingStatus", "trainingStatusLabel", "trainingStatusText"}),
-        "hrv_status": _deep_find_first(hrv_data or training_data, {"hrvStatus", "hrvStatusText", "status", "feedbackPhrase"}),
-        "hydration": _deep_find_first(hydration_data or body_data, {"hydration", "hydrationLiters", "hydrationML", "valueInML"}),
-        "weight_kg": _deep_find_first(body_data, {"weightKg", "weight"}),
-        "fitness_age": _deep_find_first(fitness_age_data or body_data, {"fitnessAge", "fitnessAgeValue", "value"}),
-        "endurance_score": _deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"}),
-        "hill_score": _deep_find_first(hill_score_data, {"score", "hillScore", "value"}),
+        "calendar_date": snapshot_date.isoformat(),
+        "steps": _coerce_int(_first_present(
+            summary_data.get("totalSteps") if isinstance(summary_data, dict) else None,
+            core_data.get("totalSteps") if isinstance(core_data, dict) else None,
+        )),
+        "step_goal": _coerce_int(_first_present(
+            summary_data.get("dailyStepGoal") if isinstance(summary_data, dict) else None,
+            core_data.get("dailyStepGoal") if isinstance(core_data, dict) else None,
+        )),
+        "distance_m": _coerce_float(_first_present(
+            summary_data.get("totalDistanceMeters") if isinstance(summary_data, dict) else None,
+            core_data.get("totalDistanceMeters") if isinstance(core_data, dict) else None,
+            summary_data.get("wellnessDistanceMeters") if isinstance(summary_data, dict) else None,
+        )),
+        "active_kcal": _coerce_float(_first_present(
+            summary_data.get("activeKilocalories") if isinstance(summary_data, dict) else None,
+            core_data.get("activeKilocalories") if isinstance(core_data, dict) else None,
+        )),
+        "resting_hr": _coerce_int(_first_present(
+            summary_data.get("restingHeartRate") if isinstance(summary_data, dict) else None,
+            core_data.get("restingHeartRate") if isinstance(core_data, dict) else None,
+        )),
+        "sleep_score": _coerce_int(_first_present(
+            core_data.get("sleepScore") if isinstance(core_data, dict) else None,
+            summary_data.get("sleepScore") if isinstance(summary_data, dict) else None,
+        )),
+        "sleep_minutes": sleep_minutes,
+        "body_battery_current": _coerce_int(body_battery_current),
+        "body_battery_at_wake": _coerce_int(_first_present(
+            core_data.get("bodyBatteryAtWakeTime") if isinstance(core_data, dict) else None,
+            summary_data.get("bodyBatteryAtWakeTime") if isinstance(summary_data, dict) else None,
+        )),
+        "body_battery_high": _coerce_int(_first_present(
+            core_data.get("bodyBatteryHighestValue") if isinstance(core_data, dict) else None,
+            summary_data.get("bodyBatteryHighestValue") if isinstance(summary_data, dict) else None,
+        )),
+        "body_battery_low": _coerce_int(_first_present(
+            core_data.get("bodyBatteryLowestValue") if isinstance(core_data, dict) else None,
+            summary_data.get("bodyBatteryLowestValue") if isinstance(summary_data, dict) else None,
+        )),
+        "stress_avg": _coerce_int(_first_present(
+            summary_data.get("averageStressLevel") if isinstance(summary_data, dict) else None,
+            core_data.get("averageStressLevel") if isinstance(core_data, dict) else None,
+        )),
+        "stress_max": _coerce_int(_first_present(
+            summary_data.get("maxStressLevel") if isinstance(summary_data, dict) else None,
+            core_data.get("maxStressLevel") if isinstance(core_data, dict) else None,
+        )),
+        "stress_qualifier": _humanize_token(_first_present(
+            summary_data.get("stressQualifier") if isinstance(summary_data, dict) else None,
+            core_data.get("stressQualifier") if isinstance(core_data, dict) else None,
+        )),
+        "intensity_minutes": _coerce_int(_first_present(
+            summary_data.get("moderateIntensityMinutes") if isinstance(summary_data, dict) else None,
+            core_data.get("moderateIntensityMinutes") if isinstance(core_data, dict) else None,
+        )) + _coerce_int(_first_present(
+            summary_data.get("vigorousIntensityMinutes") if isinstance(summary_data, dict) else None,
+            core_data.get("vigorousIntensityMinutes") if isinstance(core_data, dict) else None,
+        )),
+        "spo2_latest": _coerce_int(_first_present(
+            summary_data.get("latestSpo2") if isinstance(summary_data, dict) else None,
+            core_data.get("latestSpo2") if isinstance(core_data, dict) else None,
+        )),
+        "spo2_average": _coerce_float(_first_present(
+            summary_data.get("averageSpo2") if isinstance(summary_data, dict) else None,
+            core_data.get("averageSpo2") if isinstance(core_data, dict) else None,
+        )),
+        "training_readiness": _first_present(
+            _deep_find_first(training_readiness_data or training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
+            _deep_find_first(training_readiness_data or training_data, {"score", "value"}),
+        ),
+        "training_status": _humanize_token(_first_present(
+            training_status_payload.get("trainingStatusFeedbackPhrase") if training_status_payload else None,
+            training_balance_payload.get("trainingBalanceFeedbackPhrase") if training_balance_payload else None,
+            _deep_find_first(training_status_data or training_data, {"trainingStatusLabel", "trainingStatusText"}),
+        )),
+        "acute_load_ratio": _coerce_float(_deep_find_first(
+            training_status_payload,
+            {"dailyAcuteChronicWorkloadRatio"},
+        )),
+        "vo2max": _coerce_float(_deep_find_first(
+            training_status_data,
+            {"vo2MaxPreciseValue", "vo2MaxValue"},
+        )),
+        "hrv_status": _humanize_token(_first_present(
+            hrv_summary.get("status") if isinstance(hrv_summary, dict) else None,
+            hrv_summary.get("feedbackPhrase") if isinstance(hrv_summary, dict) else None,
+        )),
+        "hrv_last_night_avg": _coerce_int(hrv_summary.get("lastNightAvg") if isinstance(hrv_summary, dict) else None),
+        "hrv_weekly_avg": _coerce_int(hrv_summary.get("weeklyAvg") if isinstance(hrv_summary, dict) else None),
+        "hydration_ml": _coerce_int(_first_present(
+            hydration_data.get("valueInML") if isinstance(hydration_data, dict) else None,
+            body_data.get("valueInML") if isinstance(body_data, dict) else None,
+        )),
+        "hydration_goal_ml": _coerce_int(_first_present(
+            hydration_data.get("goalInML") if isinstance(hydration_data, dict) else None,
+            body_data.get("goalInML") if isinstance(body_data, dict) else None,
+        )),
+        "weight_kg": _coerce_float(_first_present(
+            body_data.get("weightKg") if isinstance(body_data, dict) else None,
+            body_data.get("weight") if isinstance(body_data, dict) else None,
+        )),
+        "body_fat_pct": _coerce_float(body_data.get("bodyFat") if isinstance(body_data, dict) else None),
+        "fitness_age": _coerce_float(_first_present(
+            body_data.get("fitnessAge") if isinstance(body_data, dict) else None,
+            _deep_find_first(fitness_age_data or body_data, {"fitnessAge", "fitnessAgeValue", "value"}),
+        )),
+        "endurance_score": _coerce_float(_deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"})),
+        "hill_score": _coerce_float(_deep_find_first(hill_score_data, {"score", "hillScore", "value"})),
+    }
+
+
+def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
+    snapshot = _build_daily_snapshot(bundle, date.today())
+    stress_level = None
+    if snapshot["stress_avg"] and snapshot["stress_qualifier"]:
+        stress_level = f"{snapshot['stress_avg']} avg ({snapshot['stress_qualifier']})"
+    elif snapshot["stress_avg"]:
+        stress_level = snapshot["stress_avg"]
+    elif snapshot["stress_qualifier"]:
+        stress_level = snapshot["stress_qualifier"]
+
+    hydration = None
+    if snapshot["hydration_ml"] and snapshot["hydration_goal_ml"]:
+        hydration = f"{_format_ml(snapshot['hydration_ml'])} of {_format_ml(snapshot['hydration_goal_ml'])}"
+    elif snapshot["hydration_ml"]:
+        hydration = _format_ml(snapshot["hydration_ml"])
+
+    hrv_status = snapshot["hrv_status"]
+    if snapshot["hrv_last_night_avg"] and snapshot["hrv_weekly_avg"]:
+        hrv_status = f"{snapshot['hrv_status'] or 'HRV'} ({snapshot['hrv_last_night_avg']} last night vs {snapshot['hrv_weekly_avg']} weekly)"
+
+    return {
+        "steps_today": snapshot["steps"] or None,
+        "body_battery": snapshot["body_battery_current"] or snapshot["body_battery_at_wake"] or None,
+        "stress_level": stress_level,
+        "resting_heart_rate": snapshot["resting_hr"] or None,
+        "sleep_score": snapshot["sleep_score"] or None,
+        "sleep_minutes": snapshot["sleep_minutes"],
+        "training_readiness": snapshot["training_readiness"],
+        "training_status": snapshot["training_status"],
+        "hrv_status": hrv_status,
+        "hydration": hydration,
+        "weight_kg": snapshot["weight_kg"] or None,
+        "fitness_age": snapshot["fitness_age"] or None,
+        "endurance_score": snapshot["endurance_score"] or None,
+        "hill_score": snapshot["hill_score"] or None,
+        "vo2max": snapshot["vo2max"] or None,
+        "stress_avg": snapshot["stress_avg"] or None,
+    }
+
+
+def _save_metric_snapshot(email: str, snapshot: dict[str, Any]) -> None:
+    calendar_date = str(snapshot.get("calendar_date"))
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            connection.execute(
+                """
+                INSERT INTO metric_snapshots (email, calendar_date, snapshot_json, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(email, calendar_date) DO UPDATE SET
+                    snapshot_json = excluded.snapshot_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    email,
+                    calendar_date,
+                    json.dumps(snapshot, default=str),
+                    _now(),
+                ),
+            )
+            connection.commit()
+
+
+def _load_metric_snapshots(email: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    with TOKEN_DB_LOCK:
+        with sqlite3.connect(TOKEN_DB_PATH) as connection:
+            rows = connection.execute(
+                """
+                SELECT snapshot_json
+                FROM metric_snapshots
+                WHERE email = ? AND calendar_date BETWEEN ? AND ?
+                ORDER BY calendar_date ASC
+                """,
+                (email, start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+
+    return [json.loads(row[0]) for row in rows]
+
+
+def _summarize_snapshot_metric(snapshots: list[dict[str, Any]], key: str) -> dict[str, Any]:
+    series = [snapshot[key] for snapshot in snapshots if snapshot.get(key) not in (None, "")]
+    if not series:
+        return {"count": 0, "latest": None, "average": None, "min": None, "max": None}
+
+    numeric_values = [float(value) for value in series]
+    return {
+        "count": len(numeric_values),
+        "latest": round(numeric_values[-1], 1),
+        "average": round(sum(numeric_values) / len(numeric_values), 1),
+        "min": round(min(numeric_values), 1),
+        "max": round(max(numeric_values), 1),
+    }
+
+
+def _build_health_history_windows(snapshots: list[dict[str, Any]], today: date) -> dict[str, dict[str, Any]]:
+    by_date = {
+        _coerce_date(snapshot.get("calendar_date")): snapshot
+        for snapshot in snapshots
+        if _coerce_date(snapshot.get("calendar_date")) is not None
+    }
+    windows: dict[str, dict[str, Any]] = {}
+
+    for label, title, days, months in TREND_WINDOWS:
+        start = _window_start(today, days=days, months=months)
+        window_snapshots = [
+            snapshot
+            for day, snapshot in by_date.items()
+            if day is not None and start <= day <= today
+        ]
+        windows[label] = {
+            "label": label,
+            "title": title,
+            "start_date": start.isoformat(),
+            "end_date": today.isoformat(),
+            "days_covered": len(window_snapshots),
+            "steps": _summarize_snapshot_metric(window_snapshots, "steps"),
+            "sleep_score": _summarize_snapshot_metric(window_snapshots, "sleep_score"),
+            "sleep_minutes": _summarize_snapshot_metric(window_snapshots, "sleep_minutes"),
+            "body_battery": _summarize_snapshot_metric(window_snapshots, "body_battery_current"),
+            "stress": _summarize_snapshot_metric(window_snapshots, "stress_avg"),
+            "resting_hr": _summarize_snapshot_metric(window_snapshots, "resting_hr"),
+            "hydration_ml": _summarize_snapshot_metric(window_snapshots, "hydration_ml"),
+            "weight_kg": _summarize_snapshot_metric(window_snapshots, "weight_kg"),
+        }
+
+    return windows
+
+
+def _build_health_history_insights(windows: dict[str, dict[str, Any]]) -> list[str]:
+    insights: list[str] = []
+    short = windows.get("7d", {})
+    medium = windows.get("30d", {})
+
+    short_sleep = short.get("sleep_score", {}).get("average")
+    medium_sleep = medium.get("sleep_score", {}).get("average")
+    if short_sleep is not None and medium_sleep not in (None, 0):
+        delta = short_sleep - medium_sleep
+        if delta >= 5:
+            insights.append("Sleep score is running above your 30-day baseline over the last 7 days.")
+        elif delta <= -5:
+            insights.append("Sleep score is running below your 30-day baseline over the last 7 days.")
+
+    short_stress = short.get("stress", {}).get("average")
+    medium_stress = medium.get("stress", {}).get("average")
+    if short_stress is not None and medium_stress not in (None, 0):
+        delta = short_stress - medium_stress
+        if delta >= 5:
+            insights.append("Average stress has been elevated versus your 30-day baseline.")
+        elif delta <= -5:
+            insights.append("Average stress has been lower than your 30-day baseline.")
+
+    short_battery = short.get("body_battery", {}).get("average")
+    medium_battery = medium.get("body_battery", {}).get("average")
+    if short_battery is not None and medium_battery not in (None, 0):
+        delta = short_battery - medium_battery
+        if delta >= 5:
+            insights.append("Body Battery has been stronger than usual over the last 7 days.")
+        elif delta <= -5:
+            insights.append("Body Battery has been softer than your 30-day baseline lately.")
+
+    short_rhr = short.get("resting_hr", {}).get("average")
+    medium_rhr = medium.get("resting_hr", {}).get("average")
+    if short_rhr is not None and medium_rhr not in (None, 0):
+        delta = short_rhr - medium_rhr
+        if delta >= 3:
+            insights.append("Resting heart rate is running above baseline, which can point to accumulated strain.")
+        elif delta <= -3:
+            insights.append("Resting heart rate is below baseline, which can point to fresher recovery.")
+
+    return insights
+
+
+def _build_history_context(email: str | None, today: date) -> dict[str, Any]:
+    if not email:
+        return {
+            "available": False,
+            "coverage_start": None,
+            "latest_date": None,
+            "days_available": 0,
+            "windows": {},
+            "insights": [],
+        }
+
+    oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
+    snapshots = _load_metric_snapshots(email, oldest_start, today)
+    windows = _build_health_history_windows(snapshots, today) if snapshots else {}
+    return {
+        "available": bool(snapshots),
+        "coverage_start": snapshots[0]["calendar_date"] if snapshots else None,
+        "latest_date": snapshots[-1]["calendar_date"] if snapshots else None,
+        "days_available": len(snapshots),
+        "windows": windows,
+        "insights": _build_health_history_insights(windows) if windows else [],
     }
 
 
 def _build_chat_brief(
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     windows = trend_data["windows"]
     current_signals = _build_current_signals(full_context_data)
     inventory = _source_inventory(full_context_data)
     profile = _source_payload(full_context_data, "profile")
+    history_context = history_context or {
+        "available": False,
+        "windows": {},
+        "insights": [],
+        "days_available": 0,
+    }
 
     observations: list[str] = []
     if current_signals["training_readiness"] not in (None, ""):
@@ -856,6 +1240,9 @@ def _build_chat_brief(
         "current_signals": current_signals,
         "trend_windows": windows,
         "trend_insights": trend_data["insights"],
+        "health_history_windows": history_context.get("windows", {}),
+        "health_history_insights": history_context.get("insights", []),
+        "history_days_available": history_context.get("days_available", 0),
         "source_inventory": inventory,
         "observations": observations,
         "suggested_questions": suggested_questions,
@@ -875,12 +1262,16 @@ def _extract_recent_activities(bundle: dict[str, Any], limit: int = 5) -> list[d
 def _summarize_shortcuts(
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    brief = _build_chat_brief(full_context_data, trend_data)
+    history_context = history_context or {"available": False, "days_available": 0, "insights": []}
+    brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
     current = brief["current_signals"]
     recent_activities = _extract_recent_activities(full_context_data)
     windows = trend_data.get("windows", {})
     last_activity = recent_activities[0] if recent_activities else None
+    history_insights = history_context.get("insights", [])
+    history_days = history_context.get("days_available", 0)
 
     cards = [
         {
@@ -952,12 +1343,20 @@ def _summarize_shortcuts(
     return {
         "summary": {
             "headline": "Garmin signals ready for chat",
-            "subheadline": "Use a shortcut or ask a question in natural language.",
-            "observations": brief["observations"][:4],
+            "subheadline": (
+                f"Use a shortcut or ask anything. Normalized history currently covers {history_days} day(s)."
+                if history_days
+                else "Use a shortcut or ask anything. Historical health snapshots are not synced yet."
+            ),
+            "observations": (brief["observations"] + history_insights)[:5],
         },
         "cards": cards,
         "suggested_questions": brief["suggested_questions"],
-        "warnings": trend_data.get("warnings", []),
+        "warnings": trend_data.get("warnings", []) + (
+            []
+            if history_days
+            else ["Health-history sync is empty. Sleep, stress, recovery, and body battery trends improve after syncing history."]
+        ),
     }
 
 
@@ -970,11 +1369,14 @@ def _build_chat_answer(
     question: str,
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    brief = _build_chat_brief(full_context_data, trend_data)
+    history_context = history_context or {"windows": {}, "insights": [], "days_available": 0}
+    brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
     current = brief["current_signals"]
     recent_activities = _extract_recent_activities(full_context_data)
     windows = trend_data.get("windows", {})
+    health_windows = history_context.get("windows", {})
     warnings = trend_data.get("warnings", [])
     answer = "I can see your Garmin profile, but I need a more specific question to give a useful answer."
     supporting_points: list[str] = []
@@ -991,6 +1393,10 @@ def _build_chat_answer(
             supporting_points.append(f"Body Battery today: {current['body_battery']}.")
         if current.get("stress_level") not in (None, ""):
             supporting_points.append(f"Stress signal: {current['stress_level']}.")
+        recent_sleep = health_windows.get("7d", {}).get("sleep_score", {}).get("average")
+        baseline_sleep = health_windows.get("30d", {}).get("sleep_score", {}).get("average")
+        if recent_sleep is not None and baseline_sleep is not None:
+            supporting_points.append(f"7d sleep score average: {recent_sleep} versus 30d baseline {baseline_sleep}.")
         follow_ups = [
             "Do my sleep and readiness point to a hard session or an easy day?",
             "How does today compare with my recent baseline?",
@@ -1004,9 +1410,14 @@ def _build_chat_answer(
             f"HRV status: {current['hrv_status']}." if current.get("hrv_status") not in (None, "") else None,
             f"Sleep score: {current['sleep_score']}." if current.get("sleep_score") not in (None, "") else None,
             f"Stress level: {current['stress_level']}." if current.get("stress_level") not in (None, "") else None,
+            f"Training status: {current['training_status']}." if current.get("training_status") not in (None, "") else None,
         ]:
             if value:
                 supporting_points.append(value)
+        recent_battery = health_windows.get("7d", {}).get("body_battery", {}).get("average")
+        baseline_battery = health_windows.get("30d", {}).get("body_battery", {}).get("average")
+        if recent_battery is not None and baseline_battery is not None:
+            supporting_points.append(f"7d Body Battery average: {recent_battery} versus 30d baseline {baseline_battery}.")
         follow_ups = [
             "Should I train hard today or back off?",
             "What is the strongest recovery signal right now?",
@@ -1032,7 +1443,7 @@ def _build_chat_answer(
         ]
     elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume"):
         insight = trend_data.get("insights", ["Trend data is limited right now."])[0]
-        answer = insight
+        answer = history_context.get("insights", [insight])[0] if history_context.get("insights") else insight
         for label in ("7d", "30d", "90d", "12m"):
             window = windows.get(label)
             if not window:
@@ -1042,13 +1453,24 @@ def _build_chat_answer(
                 f"{window['activities']['count']} activities, "
                 f"{window['activities']['total_distance_km']} km."
             )
+        for label in ("7d", "30d", "90d", "12m"):
+            window = health_windows.get(label)
+            if not window:
+                continue
+            stress_average = window["stress"]["average"]
+            sleep_average = window["sleep_score"]["average"]
+            if stress_average is not None or sleep_average is not None:
+                supporting_points.append(
+                    f"{label}: sleep score avg {sleep_average if sleep_average is not None else 'n/a'}, "
+                    f"stress avg {stress_average if stress_average is not None else 'n/a'}."
+                )
         follow_ups = [
             "Is my last week above or below baseline?",
             "What changed most over the last 90 days?",
         ]
     else:
         answer = "Here is the best cross-signal read of your Garmin data right now."
-        supporting_points.extend(brief["observations"][:4])
+        supporting_points.extend((brief["observations"] + history_context.get("insights", []))[:5])
         if recent_activities:
             supporting_points.append(
                 f"Latest activity: {recent_activities[0]['type']} on {recent_activities[0]['date'].isoformat()}."
@@ -1084,14 +1506,21 @@ def _build_ollama_prompt(
     question: str,
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
 ) -> str:
-    brief = _build_chat_brief(full_context_data, trend_data)
+    history_context = history_context or {"windows": {}, "insights": [], "days_available": 0}
+    brief = _build_chat_brief(full_context_data, trend_data, history_context=history_context)
     recent_activities = _extract_recent_activities(full_context_data)
+    current_snapshot = _build_daily_snapshot(full_context_data, date.today())
     compact_context = {
+        "current_snapshot": current_snapshot,
         "current_signals": brief["current_signals"],
         "observations": brief["observations"],
         "trend_windows": trend_data.get("windows", {}),
         "trend_insights": trend_data.get("insights", []),
+        "health_history_windows": history_context.get("windows", {}),
+        "health_history_insights": history_context.get("insights", []),
+        "history_days_available": history_context.get("days_available", 0),
         "recent_activities": [
             {
                 "date": item["date"].isoformat(),
@@ -1119,6 +1548,7 @@ async def _ask_ollama(
     question: str,
     full_context_data: dict[str, Any],
     trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
 ) -> str | None:
     if not _ollama_enabled():
         return None
@@ -1134,7 +1564,7 @@ async def _ask_ollama(
             },
             {
                 "role": "user",
-                "content": _build_ollama_prompt(question, full_context_data, trend_data),
+                "content": _build_ollama_prompt(question, full_context_data, trend_data, history_context=history_context),
             },
         ],
     }
@@ -1198,6 +1628,16 @@ async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, A
         "insights": _build_trend_insights(windows),
         "warnings": warnings,
     }
+
+
+async def _fetch_metric_snapshot_bundle(client: GarminClient, target_date: date) -> dict[str, Any]:
+    tasks = {
+        "core": _call_optional_client_method(client, "fetch_core_data", target_date=target_date),
+        "body": _call_optional_client_method(client, "fetch_body_data", target_date=target_date),
+    }
+    names = list(tasks.keys())
+    results = await asyncio.gather(*tasks.values())
+    return {name: result for name, result in zip(names, results)}
 
 
 async def _call_optional_client_method(
@@ -1334,15 +1774,21 @@ async def dashboard(request: Request):
 @app.get("/api/shortcuts")
 async def shortcuts(request: Request):
     today = date.today()
+    stored_tokens = _stored_tokens_for_request(request)
 
     async def fetch_shortcuts(client: GarminClient) -> Any:
         full_context_data, trend_data = await asyncio.gather(
             _fetch_full_context_bundle(client, today),
             _fetch_trend_windows(client, today),
         )
+        history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
+        if stored_tokens is not None:
+            _save_metric_snapshot(stored_tokens.email, _build_daily_snapshot(full_context_data, today))
+            history_context = _build_history_context(stored_tokens.email, today)
         return {
             "as_of": today.isoformat(),
-            "shortcuts": _summarize_shortcuts(full_context_data, trend_data),
+            "shortcuts": _summarize_shortcuts(full_context_data, trend_data, history_context=history_context),
+            "history": history_context,
         }
 
     return await _with_client(fetch_shortcuts, request=request)
@@ -1352,6 +1798,7 @@ async def shortcuts(request: Request):
 async def chat(request_payload: GarminChatRequest, request: Request):
     today = date.today()
     question = request_payload.question.strip()
+    stored_tokens = _stored_tokens_for_request(request)
 
     if not question:
         raise HTTPException(status_code=400, detail="Question must not be empty.")
@@ -1361,12 +1808,17 @@ async def chat(request_payload: GarminChatRequest, request: Request):
             _fetch_full_context_bundle(client, today),
             _fetch_trend_windows(client, today),
         )
+        history_context = _build_history_context(stored_tokens.email if stored_tokens else None, today)
+        if stored_tokens is not None:
+            _save_metric_snapshot(stored_tokens.email, _build_daily_snapshot(full_context_data, today))
+            history_context = _build_history_context(stored_tokens.email, today)
         heuristic_response = _build_chat_answer(
             question,
             full_context_data,
             trend_data,
+            history_context=history_context,
         )
-        ollama_answer = await _ask_ollama(question, full_context_data, trend_data)
+        ollama_answer = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
         if ollama_answer:
             heuristic_response["answer"] = ollama_answer
             heuristic_response["mode"] = "ollama"
@@ -1375,9 +1827,63 @@ async def chat(request_payload: GarminChatRequest, request: Request):
         return {
             "as_of": today.isoformat(),
             "response": heuristic_response,
+            "history": history_context,
         }
 
     return await _with_client(answer_question, request=request)
+
+
+@app.post("/api/history/sync")
+async def sync_history(payload: GarminHistorySyncRequest, request: Request):
+    stored_tokens = _stored_tokens_for_request(request)
+    if stored_tokens is None:
+        raise HTTPException(status_code=401, detail="Connect Garmin before syncing history.")
+
+    today = date.today()
+    requested_days = max(7, min(60, payload.days))
+    offset_days = max(0, min(365, payload.offset_days))
+    end_date = today - timedelta(days=offset_days)
+    start_date = end_date - timedelta(days=requested_days - 1)
+    existing_dates = {
+        snapshot.get("calendar_date")
+        for snapshot in _load_metric_snapshots(stored_tokens.email, start_date, end_date)
+    }
+    target_dates = [
+        target_day
+        for offset in range(requested_days)
+        for target_day in [start_date + timedelta(days=offset)]
+        if target_day.isoformat() not in existing_dates or target_day == end_date
+    ]
+
+    async def perform_sync(client: GarminClient) -> Any:
+        saved = 0
+        failed: list[str] = []
+        for target_day in target_dates:
+            try:
+                bundle = await _fetch_metric_snapshot_bundle(client, target_day)
+                _save_metric_snapshot(
+                    stored_tokens.email,
+                    _build_daily_snapshot(bundle, target_day),
+                )
+                saved += 1
+            except Exception as exc:
+                logger.warning("Failed to sync metric snapshot for %s: %s", target_day, type(exc).__name__)
+                failed.append(f"{target_day.isoformat()}:{type(exc).__name__}")
+            await asyncio.sleep(0.05)
+
+        history_context = _build_history_context(stored_tokens.email, today)
+        return {
+            "status": "ok",
+            "requested_days": requested_days,
+            "offset_days": offset_days,
+            "saved_days": saved,
+            "failed_days": failed[:20],
+            "batch_start": start_date.isoformat(),
+            "batch_end": end_date.isoformat(),
+            "history": history_context,
+        }
+
+    return await _with_client(perform_sync, request=request)
 
 
 @app.post("/api/connect")

@@ -64,7 +64,7 @@
       </header>
 
       <section class="grid min-h-0 flex-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-        <aside class="flex min-h-0 flex-col rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow">
+        <aside class="flex min-h-0 flex-col overflow-hidden rounded-[1.75rem] border border-line bg-panel/90 p-5 shadow-glow">
           <div class="mb-5">
             <p class="text-xs uppercase tracking-[0.45em] text-muted">Shortcuts</p>
             <h2 class="mt-3 text-2xl font-bold">Quick reads</h2>
@@ -74,6 +74,22 @@
             <p id="summaryHeadline" class="text-lg font-bold text-ink">Loading Garmin summary...</p>
             <p id="summarySubheadline" class="mt-2 text-sm leading-6 text-muted">This becomes your shortcut layer over Garmin data.</p>
             <div id="summaryObservations" class="mt-4 space-y-2"></div>
+          </section>
+
+          <section class="mt-4 rounded-[1.5rem] border border-line bg-black/20 p-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.35em] text-accent">History</p>
+                <p id="historyMeta" class="mt-2 text-sm leading-6 text-muted">Waiting for Garmin history coverage...</p>
+              </div>
+              <button
+                id="syncHistoryButton"
+                type="button"
+                class="rounded-full border border-accent/20 bg-accent/10 px-4 py-2 text-xs font-bold text-accent transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Sync 12m
+              </button>
+            </div>
           </section>
 
           <div id="shortcutList" class="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
@@ -105,7 +121,7 @@
 
           <div id="suggestionList" class="mb-5 flex flex-wrap gap-2"></div>
 
-          <div id="chatThread" class="flex-1 space-y-4 overflow-y-auto rounded-[1.5rem] border border-line bg-black/30 p-4 md:p-5"></div>
+          <div id="chatThread" class="flex-1 space-y-4 overflow-y-auto scroll-smooth rounded-[1.5rem] border border-line bg-black/30 p-4 md:p-5"></div>
 
           <form id="chatForm" class="mt-5 flex flex-col gap-3 md:flex-row">
             <input
@@ -137,6 +153,8 @@
       const summaryObservations = document.getElementById("summaryObservations");
       const shortcutList = document.getElementById("shortcutList");
       const suggestionList = document.getElementById("suggestionList");
+      const historyMeta = document.getElementById("historyMeta");
+      const syncHistoryButton = document.getElementById("syncHistoryButton");
       const chatThread = document.getElementById("chatThread");
       const chatForm = document.getElementById("chatForm");
       const chatInput = document.getElementById("chatInput");
@@ -178,6 +196,22 @@
           .replaceAll(">", "&gt;");
       }
 
+      function renderMessageContent(value) {
+        return String(value || "")
+          .split(/\n{2,}/)
+          .map((paragraph) => `<p>${escapeHtml(paragraph).replaceAll("\n", "<br />")}</p>`)
+          .join("");
+      }
+
+      function scrollChatToBottom(smooth = true) {
+        requestAnimationFrame(() => {
+          chatThread.scrollTo({
+            top: chatThread.scrollHeight,
+            behavior: smooth ? "smooth" : "auto",
+          });
+        });
+      }
+
       function appendChatBubble(role, content, supportingPoints = [], followUps = []) {
         const wrapper = document.createElement("div");
         wrapper.className = role === "user" ? "flex justify-end" : "flex justify-start";
@@ -187,7 +221,7 @@
           ? "max-w-[85%] rounded-[1.5rem] rounded-tr-md border border-accent/20 bg-accent/10 px-4 py-3 text-sm leading-6 text-ink"
           : "max-w-[85%] rounded-[1.5rem] rounded-tl-md border border-line bg-black/40 px-4 py-3 text-sm leading-6 text-[#dbe8d3]";
 
-        let html = `<div>${escapeHtml(content)}</div>`;
+        let html = `<div class="space-y-3">${renderMessageContent(content)}</div>`;
         if (supportingPoints.length) {
           html += `<div class="mt-3 space-y-2 text-muted">`;
           supportingPoints.forEach((point) => {
@@ -206,7 +240,7 @@
         bubble.innerHTML = html;
         wrapper.appendChild(bubble);
         chatThread.appendChild(wrapper);
-        chatThread.scrollTop = chatThread.scrollHeight;
+        scrollChatToBottom();
       }
 
       function clearChat() {
@@ -215,6 +249,7 @@
           "assistant",
           "Ask about today, sleep, recovery, trends, recent activity, or overall Garmin signals.",
         );
+        scrollChatToBottom(false);
       }
 
       function renderSuggestions(questions = []) {
@@ -251,6 +286,17 @@
         return button;
       }
 
+      function renderHistoryMeta(history = {}) {
+        if (!history.available) {
+          historyMeta.textContent = "Health-history sync is empty. Sync 12 months to enable wider sleep, stress, and recovery trends.";
+          return;
+        }
+
+        const coverageStart = history.coverage_start || "unknown start";
+        const latestDate = history.latest_date || "today";
+        historyMeta.textContent = `${history.days_available} daily snapshots from ${coverageStart} to ${latestDate}.`;
+      }
+
       async function loadShortcuts() {
         setMessage("Loading shortcut summaries...", "neutral");
         shortcutList.innerHTML = `<div class="rounded-[1.5rem] border border-line bg-black/20 px-4 py-4 text-sm text-muted">Loading shortcuts...</div>`;
@@ -258,6 +304,7 @@
           const response = await fetch("/api/shortcuts");
           const data = await safeJson(response);
           const shortcuts = data.shortcuts;
+          renderHistoryMeta(data.history || {});
 
           summaryHeadline.textContent = shortcuts.summary.headline;
           summarySubheadline.textContent = shortcuts.summary.subheadline;
@@ -277,6 +324,7 @@
         } catch (error) {
           shortcutList.innerHTML = `<div class="rounded-[1.5rem] border border-red-500/20 bg-red-500/10 px-4 py-4 text-sm text-danger">${escapeHtml(error.message)}</div>`;
           setWarnings([]);
+          renderHistoryMeta({});
           setMessage(error.message, "error");
         }
       }
@@ -302,6 +350,7 @@
           const payload = data.response;
           appendChatBubble("assistant", payload.answer, payload.supporting_points || [], payload.follow_ups || []);
           setWarnings(payload.warnings || []);
+          renderHistoryMeta(data.history || {});
           setMessage("Answer ready.", "success");
         } catch (error) {
           appendChatBubble("assistant", error.message);
@@ -309,6 +358,27 @@
         } finally {
           sendButton.disabled = false;
         }
+      }
+
+      async function syncHistoryInBatches(totalDays = 365, batchSize = 45) {
+        let offsetDays = 0;
+        let savedDays = 0;
+
+        while (offsetDays < totalDays) {
+          const currentBatch = Math.min(batchSize, totalDays - offsetDays);
+          setMessage(`Syncing Garmin history ${offsetDays + 1}-${offsetDays + currentBatch} of ${totalDays} days...`, "neutral");
+          const response = await fetch("/api/history/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ days: currentBatch, offset_days: offsetDays }),
+          });
+          const data = await safeJson(response);
+          savedDays += data.saved_days || 0;
+          renderHistoryMeta(data.history || {});
+          offsetDays += currentBatch;
+        }
+
+        return savedDays;
       }
 
       chatThread.addEventListener("click", (event) => {
@@ -328,6 +398,19 @@
       document.getElementById("clearChat").addEventListener("click", () => {
         clearChat();
         setMessage("Chat cleared.", "neutral");
+      });
+
+      syncHistoryButton.addEventListener("click", async () => {
+        syncHistoryButton.disabled = true;
+        try {
+          const savedDays = await syncHistoryInBatches(365, 45);
+          await loadShortcuts();
+          setMessage(`History synced. Saved ${savedDays} day(s).`, "success");
+        } catch (error) {
+          setMessage(error.message, "error");
+        } finally {
+          syncHistoryButton.disabled = false;
+        }
       });
 
       logoutButton.addEventListener("click", async () => {
