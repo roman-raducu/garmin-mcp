@@ -59,6 +59,10 @@ class GarminMfaRequest(BaseModel):
     code: str
 
 
+class GarminChatRequest(BaseModel):
+    question: str
+
+
 TOKEN_STORE: dict[str, StoredTokens] = {}
 PENDING_AUTHS: dict[str, PendingAuth] = {}
 GARTH_AUTH_LOCK = asyncio.Lock()
@@ -545,6 +549,25 @@ def _coerce_int(value: Any) -> int:
         return 0
 
 
+def _format_minutes(value: Any) -> str | None:
+    minutes = _coerce_int(value)
+    if minutes <= 0:
+        return None
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours and remaining_minutes:
+        return f"{hours}h {remaining_minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{remaining_minutes}m"
+
+
+def _format_km(value: Any) -> str | None:
+    km = _coerce_float(value)
+    if km <= 0:
+        return None
+    return f"{km:.1f} km"
+
+
 def _extract_activity_type(activity: dict[str, Any]) -> str:
     activity_type = activity.get("activityType")
     if isinstance(activity_type, dict):
@@ -830,14 +853,230 @@ def _build_chat_brief(
     }
 
 
+def _extract_recent_activities(bundle: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
+    activity_payload = _source_payload(bundle, "activity")
+    activities = sorted(
+        _normalize_activities(activity_payload),
+        key=lambda item: item["date"],
+        reverse=True,
+    )
+    return activities[:limit]
+
+
+def _summarize_shortcuts(
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+) -> dict[str, Any]:
+    brief = _build_chat_brief(full_context_data, trend_data)
+    current = brief["current_signals"]
+    recent_activities = _extract_recent_activities(full_context_data)
+    windows = trend_data.get("windows", {})
+    last_activity = recent_activities[0] if recent_activities else None
+
+    cards = [
+        {
+            "id": "today",
+            "title": "How am I today?",
+            "headline": f"{current.get('steps_today') or 'No'} steps, {current.get('training_readiness') or 'no'} readiness score",
+            "details": [
+                value
+                for value in [
+                    f"Body Battery {current['body_battery']}" if current.get("body_battery") not in (None, "") else None,
+                    f"Sleep score {current['sleep_score']}" if current.get("sleep_score") not in (None, "") else None,
+                    f"Resting HR {current['resting_heart_rate']}" if current.get("resting_heart_rate") not in (None, "") else None,
+                ]
+                if value
+            ],
+            "question": "How am I doing today based on all my Garmin signals?",
+        },
+        {
+            "id": "sleep",
+            "title": "Sleep and recovery",
+            "headline": _format_minutes(current.get("sleep_minutes")) or "Sleep details available",
+            "details": [
+                value
+                for value in [
+                    f"Sleep score {current['sleep_score']}" if current.get("sleep_score") not in (None, "") else None,
+                    f"Stress {current['stress_level']}" if current.get("stress_level") not in (None, "") else None,
+                    f"HRV {current['hrv_status']}" if current.get("hrv_status") not in (None, "") else None,
+                ]
+                if value
+            ],
+            "question": "How did I sleep and what does it mean for recovery today?",
+        },
+        {
+            "id": "training",
+            "title": "Training trend",
+            "headline": trend_data.get("insights", ["Trend data is limited right now."])[0],
+            "details": [
+                value
+                for value in [
+                    f"7d avg steps {windows['7d']['steps']['daily_average']}" if "7d" in windows else None,
+                    f"30d avg steps {windows['30d']['steps']['daily_average']}" if "30d" in windows else None,
+                    f"90d distance {windows['90d']['activities']['total_distance_km']} km" if "90d" in windows else None,
+                ]
+                if value
+            ],
+            "question": "What trend stands out across my 7, 30, and 90 day data?",
+        },
+        {
+            "id": "activity",
+            "title": "Last workout",
+            "headline": (
+                f"{last_activity['type']} for {_format_km(last_activity['distance_km']) or '0 km'}"
+                if last_activity
+                else "No recent activity found"
+            ),
+            "details": [
+                value
+                for value in [
+                    last_activity["date"].isoformat() if last_activity else None,
+                    _format_minutes(last_activity["duration_min"]) if last_activity else None,
+                    f"Avg HR {round(last_activity['average_hr'])}" if last_activity and last_activity["average_hr"] > 0 else None,
+                ]
+                if value
+            ],
+            "question": "What should I know about my most recent activity?",
+        },
+    ]
+
+    return {
+        "summary": {
+            "headline": "Garmin signals ready for chat",
+            "subheadline": "Use a shortcut or ask a question in natural language.",
+            "observations": brief["observations"][:4],
+        },
+        "cards": cards,
+        "suggested_questions": brief["suggested_questions"],
+        "warnings": trend_data.get("warnings", []),
+    }
+
+
+def _question_matches(question: str, *keywords: str) -> bool:
+    lowered = question.lower()
+    return any(keyword in lowered for keyword in keywords)
+
+
+def _build_chat_answer(
+    question: str,
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+) -> dict[str, Any]:
+    brief = _build_chat_brief(full_context_data, trend_data)
+    current = brief["current_signals"]
+    recent_activities = _extract_recent_activities(full_context_data)
+    windows = trend_data.get("windows", {})
+    warnings = trend_data.get("warnings", [])
+    answer = "I can see your Garmin profile, but I need a more specific question to give a useful answer."
+    supporting_points: list[str] = []
+    follow_ups = brief["suggested_questions"][:3]
+
+    if _question_matches(question, "sleep", "slept", "bed", "overnight", "recovery sleep"):
+        sleep_duration = _format_minutes(current.get("sleep_minutes"))
+        answer = "Your overnight recovery looks mixed based on the sleep and recovery signals I can see."
+        if current.get("sleep_score") not in (None, ""):
+            answer = f"Your sleep score is {current['sleep_score']}, which is the strongest overnight signal available right now."
+        if sleep_duration:
+            supporting_points.append(f"Sleep duration: {sleep_duration}.")
+        if current.get("body_battery") not in (None, ""):
+            supporting_points.append(f"Body Battery today: {current['body_battery']}.")
+        if current.get("stress_level") not in (None, ""):
+            supporting_points.append(f"Stress signal: {current['stress_level']}.")
+        follow_ups = [
+            "Do my sleep and readiness point to a hard session or an easy day?",
+            "How does today compare with my recent baseline?",
+        ]
+    elif _question_matches(question, "readiness", "recover", "recovery", "body battery", "hrv", "fatigue", "ready"):
+        answer = "Today looks like a recovery and readiness question, so I’m weighting training readiness, Body Battery, HRV, stress, and sleep."
+        if current.get("training_readiness") not in (None, ""):
+            answer = f"Training readiness is {current['training_readiness']}, which suggests your current capacity for training today."
+        for value in [
+            f"Body Battery: {current['body_battery']}." if current.get("body_battery") not in (None, "") else None,
+            f"HRV status: {current['hrv_status']}." if current.get("hrv_status") not in (None, "") else None,
+            f"Sleep score: {current['sleep_score']}." if current.get("sleep_score") not in (None, "") else None,
+            f"Stress level: {current['stress_level']}." if current.get("stress_level") not in (None, "") else None,
+        ]:
+            if value:
+                supporting_points.append(value)
+        follow_ups = [
+            "Should I train hard today or back off?",
+            "What is the strongest recovery signal right now?",
+        ]
+    elif _question_matches(question, "activity", "activities", "workout", "run", "ride", "training", "recent"):
+        last_activity = recent_activities[0] if recent_activities else None
+        if last_activity:
+            answer = f"Your most recent recorded activity is a {last_activity['type']} from {last_activity['date'].isoformat()}."
+            for value in [
+                _format_km(last_activity["distance_km"]),
+                _format_minutes(last_activity["duration_min"]),
+                f"Average HR {round(last_activity['average_hr'])}" if last_activity["average_hr"] > 0 else None,
+            ]:
+                if value:
+                    supporting_points.append(str(value))
+        else:
+            answer = "I could not find a recent activity payload to summarize."
+        if "30d" in windows:
+            supporting_points.append(f"30-day activity count: {windows['30d']['activities']['count']}.")
+        follow_ups = [
+            "How does my last workout compare with my recent trend?",
+            "Am I building or losing training momentum?",
+        ]
+    elif _question_matches(question, "trend", "baseline", "30 day", "90 day", "7 day", "month", "momentum", "progress", "volume"):
+        insight = trend_data.get("insights", ["Trend data is limited right now."])[0]
+        answer = insight
+        for label in ("7d", "30d", "90d", "12m"):
+            window = windows.get(label)
+            if not window:
+                continue
+            supporting_points.append(
+                f"{label}: {window['steps']['daily_average']} avg steps, "
+                f"{window['activities']['count']} activities, "
+                f"{window['activities']['total_distance_km']} km."
+            )
+        follow_ups = [
+            "Is my last week above or below baseline?",
+            "What changed most over the last 90 days?",
+        ]
+    else:
+        answer = "Here is the best cross-signal read of your Garmin data right now."
+        supporting_points.extend(brief["observations"][:4])
+        if recent_activities:
+            supporting_points.append(
+                f"Latest activity: {recent_activities[0]['type']} on {recent_activities[0]['date'].isoformat()}."
+            )
+
+    if warnings:
+        supporting_points.append("Some historical endpoints are partially unavailable right now, so trend answers may be conservative.")
+
+    return {
+        "question": question,
+        "answer": answer,
+        "supporting_points": supporting_points[:6],
+        "follow_ups": follow_ups,
+        "warnings": warnings,
+        "used_sources": brief["source_inventory"]["available"],
+    }
+
+
 async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
     oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
-    activities_raw, steps_raw = await asyncio.gather(
-        client.get_activities_by_date(oldest_start, today),
-        client.get_daily_steps(oldest_start, today),
-    )
-    activities_data = _normalize_activities(activities_raw)
-    steps_data = _normalize_steps(steps_raw)
+    warnings: list[str] = []
+
+    try:
+        activities_raw = await client.get_activities_by_date(oldest_start, today)
+        activities_data = _normalize_activities(activities_raw)
+    except Exception as exc:
+        logger.warning("Failed to fetch activity history: %s", type(exc).__name__)
+        activities_data = []
+        warnings.append(f"activity_history_unavailable:{type(exc).__name__}")
+
+    try:
+        steps_raw = await client.get_daily_steps(oldest_start, today)
+        steps_data = _normalize_steps(steps_raw)
+    except Exception as exc:
+        logger.warning("Failed to fetch step history: %s", type(exc).__name__)
+        steps_data = {}
+        warnings.append(f"step_history_unavailable:{type(exc).__name__}")
 
     windows: dict[str, dict[str, Any]] = {}
     for label, title, days, months in TREND_WINDOWS:
@@ -854,8 +1093,10 @@ async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, A
     return {
         "as_of": today.isoformat(),
         "coverage_start": oldest_start.isoformat(),
+        "available": bool(activities_data or steps_data),
         "windows": windows,
         "insights": _build_trend_insights(windows),
+        "warnings": warnings,
     }
 
 
@@ -977,6 +1218,44 @@ async def dashboard(request: Request):
             "email": stored_tokens.email if stored_tokens else "",
         },
     )
+
+
+@app.get("/api/shortcuts")
+async def shortcuts(request: Request):
+    today = date.today()
+
+    async def fetch_shortcuts(client: GarminClient) -> Any:
+        full_context_data, trend_data = await asyncio.gather(
+            _fetch_full_context_bundle(client, today),
+            _fetch_trend_windows(client, today),
+        )
+        return {
+            "as_of": today.isoformat(),
+            "shortcuts": _summarize_shortcuts(full_context_data, trend_data),
+        }
+
+    return await _with_client(fetch_shortcuts, request=request)
+
+
+@app.post("/api/chat")
+async def chat(request_payload: GarminChatRequest, request: Request):
+    today = date.today()
+
+    async def answer_question(client: GarminClient) -> Any:
+        full_context_data, trend_data = await asyncio.gather(
+            _fetch_full_context_bundle(client, today),
+            _fetch_trend_windows(client, today),
+        )
+        return {
+            "as_of": today.isoformat(),
+            "response": _build_chat_answer(
+                request_payload.question.strip(),
+                full_context_data,
+                trend_data,
+            ),
+        }
+
+    return await _with_client(answer_question, request=request)
 
 
 @app.post("/api/connect")
