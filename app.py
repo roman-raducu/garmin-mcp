@@ -2072,9 +2072,19 @@ def logo_png():
     return FileResponse(LOGO_PATH)
 
 
+@app.head("/logo.png")
+def logo_png_head():
+    return Response(status_code=200)
+
+
 @app.get("/favicon.ico")
 def favicon():
     return FileResponse(LOGO_PATH)
+
+
+@app.head("/favicon.ico")
+def favicon_head():
+    return Response(status_code=200)
 
 
 @app.get("/apple-touch-icon.png")
@@ -2082,14 +2092,29 @@ def apple_touch_icon():
     return FileResponse(LOGO_PATH)
 
 
+@app.head("/apple-touch-icon.png")
+def apple_touch_icon_head():
+    return Response(status_code=200)
+
+
 @app.get("/icon-192.png")
 def icon_192():
     return FileResponse(LOGO_PATH)
 
 
+@app.head("/icon-192.png")
+def icon_192_head():
+    return Response(status_code=200)
+
+
 @app.get("/icon-512.png")
 def icon_512():
     return FileResponse(LOGO_PATH)
+
+
+@app.head("/icon-512.png")
+def icon_512_head():
+    return Response(status_code=200)
 
 
 @app.get("/site.webmanifest")
@@ -2120,6 +2145,11 @@ def site_webmanifest():
             ],
         }
     )
+
+
+@app.head("/site.webmanifest")
+def site_webmanifest_head():
+    return Response(status_code=200)
 
 
 @app.head("/healthz")
