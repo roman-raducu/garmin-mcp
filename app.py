@@ -1985,7 +1985,7 @@ def _should_try_ollama(question: str) -> bool:
     return len(question.split()) >= 6
 
 
-def _ollama_language_matches(answer: str, language: str) -> bool:
+def _llm_language_matches(answer: str, language: str) -> bool:
     lowered = answer.lower()
     if language == "ro":
         romanian_markers = (" este ", " sunt ", " și ", " pentru ", " azi", "somn", "recuper", "antren")
@@ -2433,15 +2433,34 @@ def _build_chat_answer(
         )
     else:
         answer = (
-            "Iată citirea cea mai utilă pe care o pot face acum, combinând semnalele Garmin între ele, nu doar listând valori."
+            "Citirea de ansamblu este mai utilă aici decât o singură metrică izolată, așa că mă uit la energie, recuperare și încărcare în aceeași propoziție."
             if language == "ro"
-            else "Here’s the most useful read I can give right now by combining your Garmin signals instead of just listing them."
+            else "The broad read is more useful here than any single metric, so I’m looking at energy, recovery, and load together."
         )
         localized_history = [_translate_history_insight(item, language) for item in history_context.get("insights", [])]
         localized_observations = [_translate_observation(item, language) for item in brief["observations"]]
+        if current.get("sleep_score") not in (None, ""):
+            answer += (
+                f" Somnul de azi pornește de la un scor de {current['sleep_score']}."
+                if language == "ro"
+                else f" Today starts with a sleep score of {current['sleep_score']}."
+            )
+        if current.get("body_battery") not in (None, ""):
+            answer += (
+                f" Body Battery este {current['body_battery']}, deci acesta este nivelul de energie disponibilă pe care îl pun lângă restul semnalelor."
+                if language == "ro"
+                else f" Body Battery is {current['body_battery']}, so that is the available-energy signal I’m weighing against everything else."
+            )
+        if current.get("stress_level") not in (None, ""):
+            answer += (
+                f" Stresul este {current['stress_level']}, ceea ce îmi spune cât de calm sau cât de încărcat pare sistemul chiar acum."
+                if language == "ro"
+                else f" Stress is {current['stress_level']}, which helps show how calm or taxed your system looks right now."
+            )
         if localized_history:
             answer += f" {localized_history[0]}"
-        supporting_points.extend(localized_observations[:2])
+        elif localized_observations:
+            answer += f" {localized_observations[0]}"
         if recent_activities:
             supporting_points.append(
                 (
@@ -2461,17 +2480,54 @@ def _build_chat_answer(
     }
 
 
+def _llm_provider() -> str:
+    return os.getenv("CHARLIE_LLM_PROVIDER", "ollama").strip().lower()
+
+
+def _llm_model() -> str:
+    return os.getenv("CHARLIE_LLM_MODEL") or os.getenv("OLLAMA_MODEL", "gemma3:1b")
+
+
+def _llm_enabled() -> bool:
+    configured = os.getenv("CHARLIE_LLM_ENABLED") or os.getenv("OLLAMA_ENABLED", "true")
+    return configured.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _llm_timeout_seconds() -> float:
+    configured = os.getenv("CHARLIE_LLM_TIMEOUT_SECONDS") or os.getenv("OLLAMA_TIMEOUT_SECONDS", "9")
+    try:
+        return float(configured)
+    except (TypeError, ValueError):
+        return 9.0
+
+
 def _ollama_base_url() -> str:
     return os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 
 
-def _ollama_model() -> str:
-    return os.getenv("OLLAMA_MODEL", "gemma3:1b")
+def _openai_compatible_base_url() -> str:
+    configured = os.getenv("CHARLIE_LLM_BASE_URL")
+    if configured:
+        return configured.rstrip("/")
+
+    provider = _llm_provider()
+    if provider == "groq":
+        return "https://api.groq.com/openai/v1"
+    if provider == "openrouter":
+        return "https://openrouter.ai/api/v1"
+    if provider in {"huggingface", "hf"}:
+        return "https://router.huggingface.co/v1"
+    return ""
 
 
-def _ollama_enabled() -> bool:
-    configured = os.getenv("OLLAMA_ENABLED", "true").strip().lower()
-    return configured not in {"0", "false", "no", "off"}
+def _openai_compatible_api_key() -> str | None:
+    return (
+        os.getenv("CHARLIE_LLM_API_KEY")
+        or os.getenv("GROQ_API_KEY")
+        or os.getenv("OPENROUTER_API_KEY")
+        or os.getenv("HUGGINGFACE_API_KEY")
+        or os.getenv("HF_TOKEN")
+    )
 
 
 def _build_ollama_prompt(
@@ -2570,13 +2626,12 @@ async def _ask_ollama(
     trend_data: dict[str, Any],
     history_context: dict[str, Any] | None = None,
 ) -> str | None:
-    if not _ollama_enabled():
+    if not _llm_enabled():
         return None
 
-    configured_timeout = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "9"))
-    timeout = aiohttp.ClientTimeout(total=min(configured_timeout, 12.0))
+    timeout = aiohttp.ClientTimeout(total=min(_llm_timeout_seconds(), 12.0))
     payload = {
-        "model": _ollama_model(),
+        "model": _llm_model(),
         "stream": False,
         "messages": [
             {
@@ -2607,6 +2662,112 @@ async def _ask_ollama(
         or ""
     ).strip()
     return content or None
+
+
+def _openai_compatible_headers() -> dict[str, str] | None:
+    api_key = _openai_compatible_api_key()
+    base_url = _openai_compatible_base_url()
+    if not api_key or not base_url:
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if _llm_provider() == "openrouter":
+        headers["HTTP-Referer"] = os.getenv("CHARLIE_LLM_SITE_URL", "https://garmin.raducu.co")
+        headers["X-Title"] = os.getenv("CHARLIE_LLM_APP_NAME", "CharlieChat")
+    return headers
+
+
+async def _ask_openai_compatible_llm(
+    question: str,
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
+) -> str | None:
+    headers = _openai_compatible_headers()
+    if headers is None or not _llm_enabled():
+        return None
+
+    timeout = aiohttp.ClientTimeout(total=min(_llm_timeout_seconds(), 18.0))
+    payload = {
+        "model": _llm_model(),
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are CharlieChat, a Garmin data analyst. "
+                    "Answer only from the supplied Garmin context. "
+                    "Respond in the same language as the user's question. "
+                    "Prefer short natural paragraphs over bullets. "
+                    "Explain what stands out first, then what it likely means."
+                ),
+            },
+            {
+                "role": "user",
+                "content": _build_ollama_prompt(
+                    question,
+                    full_context_data,
+                    trend_data,
+                    history_context=history_context,
+                ),
+            },
+        ],
+    }
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                f"{_openai_compatible_base_url()}/chat/completions",
+                headers=headers,
+                json=payload,
+            ) as response:
+                if response.status >= 400:
+                    logger.warning("Hosted LLM failed with status %s", response.status)
+                    return None
+                data = await response.json()
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        logger.warning("Hosted LLM unavailable: %s", exc)
+        return None
+
+    choices = data.get("choices") or []
+    if not choices:
+        return None
+
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    return str(content).strip() or None
+
+
+async def _ask_configured_llm(
+    question: str,
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+    history_context: dict[str, Any] | None = None,
+) -> tuple[str | None, str]:
+    provider = _llm_provider()
+    if provider == "ollama":
+        return await _ask_ollama(question, full_context_data, trend_data, history_context=history_context), "ollama"
+
+    answer = await _ask_openai_compatible_llm(
+        question,
+        full_context_data,
+        trend_data,
+        history_context=history_context,
+    )
+    if answer:
+        return answer, provider
+
+    fallback = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
+    return fallback, "ollama"
 
 
 async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
@@ -3001,13 +3162,19 @@ async def chat(request_payload: GarminChatRequest, request: Request):
             trend_data,
             history_context=history_context,
         )
-        ollama_answer = None
+        llm_answer = None
+        llm_mode = "heuristic"
         question_language = _question_language(question)
         if _should_try_ollama(question):
-            ollama_answer = await _ask_ollama(question, full_context_data, trend_data, history_context=history_context)
-        if ollama_answer and _ollama_language_matches(ollama_answer, question_language):
-            heuristic_response["answer"] = ollama_answer
-            heuristic_response["mode"] = "ollama"
+            llm_answer, llm_mode = await _ask_configured_llm(
+                question,
+                full_context_data,
+                trend_data,
+                history_context=history_context,
+            )
+        if llm_answer and _llm_language_matches(llm_answer, question_language):
+            heuristic_response["answer"] = llm_answer
+            heuristic_response["mode"] = llm_mode
         else:
             heuristic_response["mode"] = "heuristic"
         return {

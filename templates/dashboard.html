@@ -554,27 +554,205 @@
         historyMeta.textContent = `${history.days_available} daily snapshots from ${formatDateRo(coverageStart)} to ${formatDateRo(latestDate)}.`;
       }
 
-      function buildSparkline(series = [], color = "#63a8ff") {
-        if (!series.length) {
-          return `<div class="text-sm text-muted">No chart data yet.</div>`;
-        }
-        const values = series.map((item) => Number(item.value)).filter((value) => Number.isFinite(value));
+      function numericSeries(series = [], cutoff = 30) {
+        return (series || [])
+          .slice(-cutoff)
+          .map((item) => ({
+            date: item.date,
+            value: Number(item.value),
+          }))
+          .filter((item) => Number.isFinite(item.value));
+      }
+
+      function average(values = []) {
         if (!values.length) {
-          return `<div class="text-sm text-muted">No chart data yet.</div>`;
+          return null;
         }
+        return values.reduce((sum, value) => sum + value, 0) / values.length;
+      }
+
+      function formatCompactNumber(value, maximumFractionDigits = 0) {
+        if (value == null || !Number.isFinite(Number(value))) {
+          return "n/a";
+        }
+        return new Intl.NumberFormat(navigator.language || "en-US", {
+          maximumFractionDigits,
+        }).format(Number(value));
+      }
+
+      function formatMetricValue(metricKey, value) {
+        if (value == null || !Number.isFinite(Number(value))) {
+          return "n/a";
+        }
+        const numeric = Number(value);
+        if (metricKey === "steps") {
+          return `${formatCompactNumber(numeric)} steps`;
+        }
+        if (metricKey === "sleep_score" || metricKey === "body_battery_current" || metricKey === "stress_avg" || metricKey === "training_readiness") {
+          return formatCompactNumber(numeric);
+        }
+        if (metricKey === "resting_hr") {
+          return `${formatCompactNumber(numeric)} bpm`;
+        }
+        if (metricKey === "weight_kg") {
+          return `${formatCompactNumber(numeric, 1)} kg`;
+        }
+        if (metricKey === "vo2max") {
+          return formatCompactNumber(numeric, 1);
+        }
+        if (metricKey === "hydration_ml") {
+          return `${formatCompactNumber(numeric)} ml`;
+        }
+        return formatCompactNumber(numeric, 1);
+      }
+
+      function metricDirection(metricKey, delta) {
+        if (delta == null || !Number.isFinite(delta)) {
+          return {
+            label: "Insufficient baseline",
+            tone: "border-line text-muted",
+            emphasis: "stable",
+          };
+        }
+
+        const thresholds = {
+          steps: 800,
+          sleep_score: 3,
+          body_battery_current: 4,
+          stress_avg: 3,
+          resting_hr: 2,
+          weight_kg: 0.5,
+          vo2max: 0.3,
+          hydration_ml: 250,
+        };
+        const threshold = thresholds[metricKey] || 1;
+        if (Math.abs(delta) < threshold) {
+          return {
+            label: "Close to baseline",
+            tone: "border-line text-muted",
+            emphasis: "stable",
+          };
+        }
+
+        const lowerIsBetter = new Set(["stress_avg", "resting_hr"]);
+        const improvement = lowerIsBetter.has(metricKey) ? delta < 0 : delta > 0;
+        return {
+          label: improvement ? "Trending better" : "Running softer",
+          tone: improvement
+            ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-200"
+            : "border-amber-400/20 bg-amber-400/10 text-amber-100",
+          emphasis: improvement ? "up" : "down",
+        };
+      }
+
+      function chunkSeries(series = [], maxBars = 12) {
+        if (!series.length) {
+          return [];
+        }
+        const bucketSize = Math.max(1, Math.ceil(series.length / maxBars));
+        const buckets = [];
+        for (let index = 0; index < series.length; index += bucketSize) {
+          const slice = series.slice(index, index + bucketSize);
+          buckets.push({
+            date: slice[slice.length - 1]?.date,
+            value: average(slice.map((item) => item.value)),
+          });
+        }
+        return buckets.filter((item) => item.value != null);
+      }
+
+      function buildRangeBars(series = []) {
+        const buckets = chunkSeries(series);
+        if (!buckets.length) {
+          return `<div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3 text-sm text-muted">No readable history yet for this metric.</div>`;
+        }
+        const values = buckets.map((item) => item.value);
         const max = Math.max(...values);
         const min = Math.min(...values);
         const range = max - min || 1;
-        const points = values.map((value, index) => {
-          const x = (index / Math.max(values.length - 1, 1)) * 100;
-          const y = 100 - ((value - min) / range) * 100;
-          return `${x},${y}`;
-        }).join(" ");
+
         return `
-          <svg viewBox="0 0 100 100" class="h-28 w-full">
-            <polyline fill="none" stroke="${color}" stroke-width="3" points="${points}" />
-          </svg>
+          <div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3">
+            <div class="flex h-28 items-end gap-2">
+              ${buckets.map((item) => {
+                const height = 22 + (((item.value - min) / range) * 78);
+                return `
+                  <div class="flex min-w-0 flex-1 flex-col items-center gap-2">
+                    <div class="w-full rounded-full bg-accent/90" style="height:${height.toFixed(1)}px"></div>
+                    <div class="text-[11px] text-muted">${escapeHtml(formatDateRo(item.date).slice(0, 5))}</div>
+                  </div>
+                `;
+              }).join("")}
+            </div>
+          </div>
         `;
+      }
+
+      function metricNarrative(metricKey, label, latest, rangeAvg, baselineAvg, rangeMin, rangeMax) {
+        const latestText = formatMetricValue(metricKey, latest);
+        const avgText = formatMetricValue(metricKey, rangeAvg);
+        const baselineText = baselineAvg == null ? null : formatMetricValue(metricKey, baselineAvg);
+        const direction = metricDirection(metricKey, baselineAvg == null ? null : rangeAvg - baselineAvg);
+
+        const intros = {
+          steps: `You're currently at ${latestText}, and your ${activeAnalyticsRange} rhythm is ${avgText}.`,
+          sleep_score: `Sleep quality is sitting at ${latestText} right now, with a ${activeAnalyticsRange} average of ${avgText}.`,
+          body_battery_current: `Body Battery is ${latestText} today, and the broader ${activeAnalyticsRange} average is ${avgText}.`,
+          stress_avg: `Stress is currently ${latestText}, with a ${activeAnalyticsRange} average of ${avgText}.`,
+          resting_hr: `Resting HR is ${latestText}, and your ${activeAnalyticsRange} average is ${avgText}.`,
+          weight_kg: `Weight is ${latestText} on the latest snapshot, with a ${activeAnalyticsRange} average of ${avgText}.`,
+          vo2max: `VO2 max is ${latestText} on the latest available day, with a ${activeAnalyticsRange} average of ${avgText}.`,
+          hydration_ml: `Hydration is ${latestText} on the latest day, and your ${activeAnalyticsRange} average is ${avgText}.`,
+        };
+
+        const implications = {
+          steps: direction.emphasis === "up"
+            ? "Daily movement is running above your usual rhythm, so overall activity load looks stronger than baseline."
+            : direction.emphasis === "down"
+              ? "Daily movement is below your normal rhythm, which usually means your day-to-day activity load has softened."
+              : "Movement is broadly holding near baseline, so nothing major is breaking away.",
+          sleep_score: direction.emphasis === "up"
+            ? "Sleep has been supporting recovery better than usual over this window."
+            : direction.emphasis === "down"
+              ? "Sleep quality has been softer than your normal baseline, so recovery may be less robust."
+              : "Sleep is holding close to baseline without a strong directional shift.",
+          body_battery_current: direction.emphasis === "up"
+            ? "Energy reserves have generally been stronger than your baseline."
+            : direction.emphasis === "down"
+              ? "Energy reserves have been below your baseline, which usually means recovery has been less complete."
+              : "Body Battery is behaving close to your baseline lately.",
+          stress_avg: direction.emphasis === "up"
+            ? "Stress has been elevated versus baseline, so your system looks more taxed than usual."
+            : direction.emphasis === "down"
+              ? "Stress has been calmer than baseline, which is usually favorable for recovery."
+              : "Stress is close to your normal range right now.",
+          resting_hr: direction.emphasis === "up"
+            ? "Resting HR is running high enough to suggest more accumulated strain than usual."
+            : direction.emphasis === "down"
+              ? "Resting HR is below baseline, which usually points to a fresher recovery state."
+              : "Resting HR is broadly stable versus baseline.",
+          weight_kg: direction.emphasis === "up"
+            ? "Body weight is trending higher than your recent norm."
+            : direction.emphasis === "down"
+              ? "Body weight is trending lower than your recent norm."
+              : "Body weight is fairly stable against recent history.",
+          vo2max: direction.emphasis === "up"
+            ? "Aerobic fitness is trending a little better than your baseline."
+            : direction.emphasis === "down"
+              ? "Aerobic fitness has softened compared with your baseline."
+              : "VO2 max is holding fairly close to baseline.",
+          hydration_ml: direction.emphasis === "up"
+            ? "Hydration intake has been stronger than your usual recent level."
+            : direction.emphasis === "down"
+              ? "Hydration intake has been softer than your usual recent level."
+              : "Hydration is roughly in line with your recent norm.",
+        };
+
+        const baselineLine = baselineText
+          ? ` Against your 30-day baseline of ${baselineText}, this reads as ${direction.label.toLowerCase()}.`
+          : " There still isn't enough 30-day history to call a strong baseline.";
+
+        return `${intros[metricKey] || `${label} is currently ${latestText}.`}${baselineLine} ${implications[metricKey] || ""} Window range: ${formatMetricValue(metricKey, rangeMin)} to ${formatMetricValue(metricKey, rangeMax)}.`;
       }
 
       function renderAnalytics(analytics = {}) {
@@ -582,18 +760,18 @@
         const rangeOrder = { "7d": 7, "30d": 30, "90d": 90, "12m": 366 };
         const cutoff = rangeOrder[activeAnalyticsRange] || 30;
         analyticsMeta.textContent = analytics.days_available
-          ? `${analytics.days_available} snapshot(s) available through ${formatDateRo(analytics.latest_date)}`
+          ? `History synced: ${analytics.days_available} days through ${formatDateRo(analytics.latest_date)}`
           : "Sync more history to unlock analytics.";
 
         analyticsInsights.innerHTML = "";
         (analytics.insights || []).slice(0, 4).forEach((insight) => {
           const card = document.createElement("div");
-          card.className = "rounded-[1.25rem] border border-line bg-black/20 px-4 py-4 text-sm leading-6 text-[#dbe8d3]";
+          card.className = "rounded-[1.25rem] border border-line bg-black/20 px-4 py-4 text-sm leading-7 text-[#dbe8d3]";
           card.textContent = insight;
           analyticsInsights.appendChild(card);
         });
         if (!analyticsInsights.children.length) {
-          analyticsInsights.innerHTML = `<div class="rounded-[1.25rem] border border-line bg-black/20 px-4 py-4 text-sm text-muted">No analytics insights yet. Sync more history to get stronger trends.</div>`;
+          analyticsInsights.innerHTML = `<div class="rounded-[1.25rem] border border-line bg-black/20 px-4 py-4 text-sm text-muted">No strong pattern stands out yet. Sync more history to make the analytics read sharper.</div>`;
         }
 
         const metricCards = [
@@ -608,16 +786,69 @@
         ];
         analyticsCharts.innerHTML = "";
         metricCards.forEach(([key, label]) => {
-          const series = (analytics.series?.[key] || []).slice(-cutoff);
-          const latest = series.length ? series[series.length - 1].value : null;
+          const fullSeries = (analytics.series?.[key] || [])
+            .map((item) => ({ date: item.date, value: Number(item.value) }))
+            .filter((item) => Number.isFinite(item.value));
+          const rangeSeries = numericSeries(fullSeries, cutoff);
+          const baselineSeries = numericSeries(fullSeries, Math.min(30, fullSeries.length || 30));
+
           const card = document.createElement("div");
-          card.className = "rounded-[1.5rem] border border-line bg-black/20 p-4";
+          card.className = "rounded-[1.5rem] border border-line bg-black/20 p-4 md:p-5";
+
+          if (!rangeSeries.length) {
+            card.innerHTML = `
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-base font-semibold text-ink">${escapeHtml(label)}</div>
+                <div class="rounded-full border border-line px-3 py-1 text-xs font-semibold text-muted">No data</div>
+              </div>
+              <div class="mt-4 text-sm leading-7 text-muted">There isn't enough synced history yet to read this metric in a useful way.</div>
+            `;
+            analyticsCharts.appendChild(card);
+            return;
+          }
+
+          const values = rangeSeries.map((item) => item.value);
+          const latest = values[values.length - 1];
+          const rangeAvg = average(values);
+          const baselineAvg = average(baselineSeries.map((item) => item.value));
+          const rangeMin = Math.min(...values);
+          const rangeMax = Math.max(...values);
+          const previousValues = fullSeries
+            .slice(Math.max(0, fullSeries.length - (rangeSeries.length * 2)), Math.max(0, fullSeries.length - rangeSeries.length))
+            .map((item) => item.value);
+          const previousAvg = average(previousValues);
+          const direction = metricDirection(key, previousAvg == null ? (baselineAvg == null ? null : rangeAvg - baselineAvg) : rangeAvg - previousAvg);
+
           card.innerHTML = `
-            <div class="flex items-center justify-between gap-3">
-              <div class="text-sm font-semibold text-ink">${escapeHtml(label)}</div>
-              <div class="text-sm text-muted">${latest ?? "n/a"}</div>
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <div class="text-base font-semibold text-ink">${escapeHtml(label)}</div>
+                <div class="mt-2 text-3xl font-bold text-ink">${escapeHtml(formatMetricValue(key, latest))}</div>
+              </div>
+              <div class="rounded-full border px-3 py-1 text-xs font-semibold ${direction.tone}">${escapeHtml(direction.label)}</div>
             </div>
-            <div class="mt-3">${buildSparkline(series)}</div>
+            <p class="mt-4 text-sm leading-7 text-[#dbe8d3]">${escapeHtml(metricNarrative(key, label, latest, rangeAvg, baselineAvg, rangeMin, rangeMax))}</p>
+            <div class="mt-4 grid gap-2 sm:grid-cols-2">
+              <div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3">
+                <div class="text-[11px] uppercase tracking-[0.25em] text-muted">Window average</div>
+                <div class="mt-2 text-sm font-semibold text-ink">${escapeHtml(formatMetricValue(key, rangeAvg))}</div>
+              </div>
+              <div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3">
+                <div class="text-[11px] uppercase tracking-[0.25em] text-muted">30d baseline</div>
+                <div class="mt-2 text-sm font-semibold text-ink">${escapeHtml(formatMetricValue(key, baselineAvg))}</div>
+              </div>
+              <div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3">
+                <div class="text-[11px] uppercase tracking-[0.25em] text-muted">Window low</div>
+                <div class="mt-2 text-sm font-semibold text-ink">${escapeHtml(formatMetricValue(key, rangeMin))}</div>
+              </div>
+              <div class="rounded-[1rem] border border-line bg-black/20 px-3 py-3">
+                <div class="text-[11px] uppercase tracking-[0.25em] text-muted">Window high</div>
+                <div class="mt-2 text-sm font-semibold text-ink">${escapeHtml(formatMetricValue(key, rangeMax))}</div>
+              </div>
+            </div>
+            <div class="mt-4">
+              ${buildRangeBars(rangeSeries)}
+            </div>
           `;
           analyticsCharts.appendChild(card);
         });

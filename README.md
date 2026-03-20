@@ -57,6 +57,28 @@ OLLAMA_MODEL=gemma3:1b
 OLLAMA_TIMEOUT_SECONDS=120
 ```
 
+Optional hosted LLM values if you want better language quality than a small local Ollama model:
+
+```env
+CHARLIE_LLM_ENABLED=true
+CHARLIE_LLM_PROVIDER=groq
+CHARLIE_LLM_MODEL=openai/gpt-oss-20b
+CHARLIE_LLM_API_KEY=...
+CHARLIE_LLM_TIMEOUT_SECONDS=20
+```
+
+Supported hosted provider presets:
+
+- `groq` -> `https://api.groq.com/openai/v1`
+- `openrouter` -> `https://openrouter.ai/api/v1`
+- `huggingface` -> `https://router.huggingface.co/v1`
+
+You can also override the endpoint directly with:
+
+```env
+CHARLIE_LLM_BASE_URL=https://your-provider.example/v1
+```
+
 If you later bootstrap Garmin tokens once, add them here too:
 
 ```env
