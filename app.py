@@ -553,6 +553,109 @@ def _build_trend_insights(windows: dict[str, dict[str, Any]]) -> list[str]:
     return insights
 
 
+def _deep_find_first(data: Any, keys: set[str]) -> Any:
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in keys and value not in (None, "", [], {}):
+                return value
+        for value in data.values():
+            found = _deep_find_first(value, keys)
+            if found not in (None, "", [], {}):
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _deep_find_first(item, keys)
+            if found not in (None, "", [], {}):
+                return found
+    return None
+
+
+def _source_payload(bundle: dict[str, Any], source_name: str) -> Any:
+    source = bundle.get(source_name, {})
+    if isinstance(source, dict) and source.get("available"):
+        return source.get("data")
+    return None
+
+
+def _source_inventory(bundle: dict[str, Any]) -> dict[str, list[str]]:
+    available: list[str] = []
+    unavailable: list[str] = []
+    for name, source in bundle.items():
+        if isinstance(source, dict) and source.get("available"):
+            available.append(name)
+        else:
+            unavailable.append(name)
+    return {
+        "available": sorted(available),
+        "unavailable": sorted(unavailable),
+    }
+
+
+def _build_current_signals(bundle: dict[str, Any]) -> dict[str, Any]:
+    summary_data = _source_payload(bundle, "summary")
+    core_data = _source_payload(bundle, "core")
+    body_data = _source_payload(bundle, "body")
+    training_data = _source_payload(bundle, "training")
+
+    return {
+        "steps_today": _deep_find_first(summary_data or core_data, {"totalSteps", "steps", "dailySteps"}),
+        "body_battery": _deep_find_first(core_data, {"bodyBattery", "bodyBatteryLevel", "bodyBatteryChargedValue"}),
+        "stress_level": _deep_find_first(core_data, {"stressLevel", "stressQualifierText", "overallStressLevel"}),
+        "resting_heart_rate": _deep_find_first(summary_data or core_data, {"restingHeartRate", "restingHR", "restingHeartRateValue"}),
+        "sleep_score": _deep_find_first(core_data, {"sleepScore", "overallSleepScore"}),
+        "sleep_minutes": _deep_find_first(core_data, {"sleepTimeMinutes", "sleepMinutes"}),
+        "training_readiness": _deep_find_first(training_data, {"trainingReadiness", "trainingReadinessScore", "readinessScore"}),
+        "training_status": _deep_find_first(training_data, {"trainingStatus", "trainingStatusLabel", "trainingStatusText"}),
+        "hrv_status": _deep_find_first(training_data, {"hrvStatus", "hrvStatusText", "status"}),
+        "hydration": _deep_find_first(body_data, {"hydration", "hydrationLiters", "hydrationML"}),
+        "weight_kg": _deep_find_first(body_data, {"weightKg", "weight"}),
+        "fitness_age": _deep_find_first(body_data, {"fitnessAge", "fitnessAgeValue"}),
+    }
+
+
+def _build_chat_brief(
+    full_context_data: dict[str, Any],
+    trend_data: dict[str, Any],
+) -> dict[str, Any]:
+    windows = trend_data["windows"]
+    current_signals = _build_current_signals(full_context_data)
+    inventory = _source_inventory(full_context_data)
+    profile = _source_payload(full_context_data, "profile")
+
+    observations: list[str] = []
+    if current_signals["training_readiness"] not in (None, ""):
+        observations.append(f"Training readiness today: {current_signals['training_readiness']}.")
+    if current_signals["body_battery"] not in (None, ""):
+        observations.append(f"Body Battery signal today: {current_signals['body_battery']}.")
+    if current_signals["sleep_score"] not in (None, ""):
+        observations.append(f"Sleep score today: {current_signals['sleep_score']}.")
+    if current_signals["resting_heart_rate"] not in (None, ""):
+        observations.append(f"Resting heart rate today: {current_signals['resting_heart_rate']}.")
+    if current_signals["steps_today"] not in (None, ""):
+        observations.append(f"Steps today so far: {current_signals['steps_today']}.")
+
+    suggested_questions = [
+        "How is my current week tracking versus my 30-day baseline?",
+        "Am I building or losing training momentum over the last 90 days?",
+        "What signals suggest recovery is good or poor today?",
+        "What patterns stand out across sleep, readiness, and activity volume?",
+    ]
+
+    return {
+        "profile": {
+            "display_name": _deep_find_first(profile, {"displayName", "fullName", "userName"}),
+            "location": _deep_find_first(profile, {"location", "countryCode"}),
+            "gender": _deep_find_first(profile, {"gender"}),
+        },
+        "current_signals": current_signals,
+        "trend_windows": windows,
+        "trend_insights": trend_data["insights"],
+        "source_inventory": inventory,
+        "observations": observations,
+        "suggested_questions": suggested_questions,
+    }
+
+
 async def _fetch_trend_windows(client: GarminClient, today: date) -> dict[str, Any]:
     oldest_start = min(_window_start(today, days=days, months=months) for _, _, days, months in TREND_WINDOWS)
     activities_raw, steps_raw = await asyncio.gather(
@@ -603,6 +706,7 @@ async def _call_optional_client_method(
 async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[str, Any]:
     tasks = {
         "profile": _call_optional_client_method(client, "get_user_profile"),
+        "summary": _call_optional_client_method(client, "get_user_summary"),
         "core": _call_optional_client_method(client, "fetch_core_data", target_date=today),
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=today),
         "activity": _call_optional_client_method(client, "fetch_activity_data"),
@@ -929,3 +1033,21 @@ async def chat_context(request: Request):
         }
 
     return await _with_client(fetch_chat_context, request=request)
+
+
+@app.get("/chat-brief")
+async def chat_brief(request: Request):
+    today = date.today()
+
+    async def fetch_chat_brief(client: GarminClient) -> Any:
+        full_context_data, trend_data = await asyncio.gather(
+            _fetch_full_context_bundle(client, today),
+            _fetch_trend_windows(client, today),
+        )
+        return {
+            "as_of": today.isoformat(),
+            "brief": _build_chat_brief(full_context_data, trend_data),
+            "unsupported_targets": ["nutrition"],
+        }
+
+    return await _with_client(fetch_chat_brief, request=request)
