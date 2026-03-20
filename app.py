@@ -867,6 +867,7 @@ def _training_status_payload_map(training_status_data: Any, *keys: str) -> dict[
 
 def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[str, Any]:
     summary_data = _source_payload(bundle, "summary")
+    daily_steps_today = _source_payload(bundle, "daily_steps_today")
     core_data = _source_payload(bundle, "core")
     body_data = _source_payload(bundle, "body")
     training_data = _source_payload(bundle, "training")
@@ -906,14 +907,17 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
     return {
         "calendar_date": snapshot_date.isoformat(),
         "steps": _coerce_int(_first_present(
+            _deep_find_first(daily_steps_today, {"totalSteps"}),
             summary_data.get("totalSteps") if isinstance(summary_data, dict) else None,
             core_data.get("totalSteps") if isinstance(core_data, dict) else None,
         )),
         "step_goal": _coerce_int(_first_present(
+            _deep_find_first(daily_steps_today, {"stepGoal"}),
             summary_data.get("dailyStepGoal") if isinstance(summary_data, dict) else None,
             core_data.get("dailyStepGoal") if isinstance(core_data, dict) else None,
         )),
         "distance_m": _coerce_float(_first_present(
+            _deep_find_first(daily_steps_today, {"totalDistance"}),
             summary_data.get("totalDistanceMeters") if isinstance(summary_data, dict) else None,
             core_data.get("totalDistanceMeters") if isinstance(core_data, dict) else None,
             summary_data.get("wellnessDistanceMeters") if isinstance(summary_data, dict) else None,
@@ -1013,6 +1017,10 @@ def _build_daily_snapshot(bundle: dict[str, Any], snapshot_date: date) -> dict[s
         )),
         "endurance_score": _coerce_float(_deep_find_first(endurance_score_data, {"score", "enduranceScore", "value"})),
         "hill_score": _coerce_float(_deep_find_first(hill_score_data, {"score", "hillScore", "value"})),
+        "last_sync_time": _first_present(
+            summary_data.get("lastSyncTimestampGMT") if isinstance(summary_data, dict) else None,
+            summary_data.get("lastSyncTimestampLocal") if isinstance(summary_data, dict) else None,
+        ),
     }
 
 
@@ -1263,8 +1271,8 @@ def _current_metric_rows(bundle: dict[str, Any]) -> list[dict[str, str]]:
         ("Resting HR", str(snapshot["resting_hr"]) if snapshot["resting_hr"] else None),
         ("Sleep score", str(snapshot["sleep_score"]) if snapshot["sleep_score"] else None),
         ("Sleep", _format_minutes(snapshot["sleep_minutes"])),
-        ("Body Battery", str(snapshot["body_battery_current"]) if snapshot["body_battery_current"] else None),
-        ("Body Battery wake", str(snapshot["body_battery_at_wake"]) if snapshot["body_battery_at_wake"] else None),
+        ("Body Battery score", str(snapshot["body_battery_current"]) if snapshot["body_battery_current"] else None),
+        ("Body Battery at wake", str(snapshot["body_battery_at_wake"]) if snapshot["body_battery_at_wake"] else None),
         ("Stress avg", str(snapshot["stress_avg"]) if snapshot["stress_avg"] else None),
         ("Stress max", str(snapshot["stress_max"]) if snapshot["stress_max"] else None),
         ("Stress state", snapshot["stress_qualifier"]),
@@ -1284,8 +1292,39 @@ def _current_metric_rows(bundle: dict[str, Any]) -> list[dict[str, str]]:
         ("SpO2 latest", str(snapshot["spo2_latest"]) if snapshot["spo2_latest"] else None),
         ("SpO2 average", f"{snapshot['spo2_average']:.1f}" if snapshot["spo2_average"] else None),
         ("Intensity minutes", str(snapshot["intensity_minutes"]) if snapshot["intensity_minutes"] else None),
+        ("Last Garmin sync", str(snapshot["last_sync_time"]) if snapshot["last_sync_time"] else None),
     ]
     return [{"label": label, "value": value} for label, value in rows if value not in (None, "", "0")]
+
+
+def _extract_primary_device(bundle: dict[str, Any]) -> dict[str, Any] | None:
+    devices_data = _source_payload(bundle, "devices")
+    if not isinstance(devices_data, list):
+        return None
+    device = next((item for item in devices_data if isinstance(item, dict) and item.get("primary")), None)
+    if device is None:
+        device = next((item for item in devices_data if isinstance(item, dict)), None)
+    return device
+
+
+def _extract_device_status(bundle: dict[str, Any]) -> dict[str, Any]:
+    device = _extract_primary_device(bundle) or {}
+    settings = _source_payload(bundle, "device_settings")
+    battery_percent = _deep_find_first(device, {"batteryLevel", "batteryPercent", "batteryPercentage"})
+    if battery_percent in (None, "", [], {}):
+        battery_percent = _deep_find_first(settings, {"batteryLevel", "batteryPercent", "batteryPercentage"})
+    device_id = (
+        device.get("deviceId")
+        or device.get("unitId")
+        or device.get("id")
+        or device.get("deviceTypePk")
+    )
+    return {
+        "name": device.get("productDisplayName") or device.get("deviceTypeSimpleName") or device.get("applicationKey"),
+        "image_url": device.get("imageUrl"),
+        "battery_percent": _coerce_int(battery_percent) if battery_percent not in (None, "", [], {}) else None,
+        "device_id": device_id,
+    }
 
 
 def _build_chat_brief(
@@ -1435,15 +1474,12 @@ def _summarize_shortcuts(
     return {
         "summary": {
             "headline": "Garmin signals ready for chat",
-            "subheadline": (
-                f"Use a shortcut or ask anything. Normalized history currently covers {history_days} day(s)."
-                if history_days
-                else "Use a shortcut or ask anything. Historical health snapshots are not synced yet."
-            ),
+            "subheadline": "",
             "observations": (brief["observations"] + history_insights)[:5],
         },
         "cards": cards,
         "current_metrics": _current_metric_rows(full_context_data),
+        "device_status": _extract_device_status(full_context_data),
         "source_inventory": brief["source_inventory"],
         "suggested_questions": brief["suggested_questions"],
         "warnings": trend_data.get("warnings", []) + (
@@ -1898,10 +1934,10 @@ async def _fetch_runtime_context(
     force_refresh: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if email and not force_refresh:
-        cached_full = _load_context_cache(email, f"full_context:{today.isoformat()}")
         cached_trends = _load_context_cache(email, f"trend_context:{today.isoformat()}")
-        if cached_full is not None and cached_trends is not None:
-            return cached_full, cached_trends
+        if cached_trends is not None:
+            full_context_data = await _fetch_full_context_bundle(client, today)
+            return full_context_data, cached_trends
 
     full_context_data, trend_data = await asyncio.gather(
         _fetch_full_context_bundle(client, today),
@@ -1909,7 +1945,6 @@ async def _fetch_runtime_context(
     )
 
     if email:
-        _save_context_cache(email, f"full_context:{today.isoformat()}", full_context_data)
         _save_context_cache(email, f"trend_context:{today.isoformat()}", trend_data)
 
     return full_context_data, trend_data
@@ -1937,6 +1972,7 @@ async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[
     tasks = {
         "profile": _call_optional_client_method(client, "get_user_profile"),
         "summary": _call_optional_client_method(client, "get_user_summary"),
+        "daily_steps_today": _call_optional_client_method(client, "get_daily_steps", today, today),
         "core": _call_optional_client_method(client, "fetch_core_data", target_date=today),
         "body": _call_optional_client_method(client, "fetch_body_data", target_date=today),
         "activity": _call_optional_client_method(client, "fetch_activity_data"),
@@ -1959,7 +1995,30 @@ async def _fetch_full_context_bundle(client: GarminClient, today: date) -> dict[
 
     names = list(tasks.keys())
     results = await asyncio.gather(*tasks.values())
-    return {name: result for name, result in zip(names, results)}
+    bundle = {name: result for name, result in zip(names, results)}
+
+    devices_data = _source_payload(bundle, "devices")
+    primary_device = None
+    if isinstance(devices_data, list):
+        primary_device = next((item for item in devices_data if isinstance(item, dict) and item.get("primary")), None)
+        if primary_device is None:
+            primary_device = next((item for item in devices_data if isinstance(item, dict)), None)
+
+    device_id = None
+    if isinstance(primary_device, dict):
+        device_id = (
+            primary_device.get("deviceId")
+            or primary_device.get("unitId")
+            or primary_device.get("id")
+            or primary_device.get("deviceTypePk")
+        )
+
+    if device_id is not None:
+        bundle["device_settings"] = await _call_optional_client_method(client, "get_device_settings", device_id)
+    else:
+        bundle["device_settings"] = {"available": False, "error": "device_id_unavailable"}
+
+    return bundle
 
 
 def _pending_status_for_browser(browser_session_id: str | None) -> dict[str, Any] | None:
